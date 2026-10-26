@@ -259,7 +259,7 @@ Per-consumer (one battery), one scalar value per topic:
 | `auto_target/set` | `true`/`false` | `true` hands the battery back to automatic control; `false` keeps the manual override. |
 | `manual_target/set` | number, −10000…10000 | Force this battery's power (watts). Setting it switches to manual mode. |
 | `distribution_weight/set` | number, 0.0…10.0 | Relative share of the split (ratio-based; `0` parks the battery at 0 W but keeps it in the pool). |
-| `efficiency_window_weight/set` | number, 0…100 (**percent**) | Share of efficiency-rotation active time. `100` neutral, `0` skips while limiting. |
+| `efficiency_window_weight/set` | number, 0…100 (**percent**) | Share of efficiency-rotation active time. `100` neutral, `0` makes the battery a backup that never leads but covers what the others can't. |
 | `min_dc_output/set` | number, 0…1000 | Per-battery minimum DC discharge keep-alive (watts). |
 
 Per-device, JSON body on `{base}/ct002/{did}/set`:
@@ -335,15 +335,20 @@ client has the same controls:
   cycle.
 - **Efficiency Window Weight** — how much of the **efficiency rotation** each
   battery takes when demand is low and the balancer runs only some batteries to
-  keep them efficient. `100 %` is neutral. `0 %` skips a battery: it is parked
-  while limiting, but still used when all batteries are needed. Values in between
+  keep them efficient. `100 %` is neutral. `0 %` makes a battery a **backup**: it
+  never leads and stays at 0 W while the others can cover the demand, but it
+  covers what they can't once they reach their power limit or are full or empty
+  (the [standby reserve](ct002.md#battery-efficiency-optimization)), and it runs
+  with the others when demand needs every battery. To keep a battery out
+  entirely, set its **Distribution Weight** to 0 or switch it off with
+  **Active** instead; both hold it at 0 W. Values in between
   give it proportionally less, since a battery holds each turn for that fraction
   of [EFFICIENCY_ROTATION_INTERVAL](ct002.md#battery-efficiency-optimization). Two
   batteries you want to take turns in a 1:2 ratio can be set to `50 %` and
   `100 %`: with the default 15-minute interval that is 7.5 minutes against 15.
   This applies while demand runs one battery at a time. Once several run at once,
-  every turn is a full interval again (only `0 %` still parks a battery), and
-  **Distribution Weight** is what splits the load among them.
+  every turn is a full interval again (only `0 %` still makes a battery the
+  backup), and **Distribution Weight** is what splits the load among them.
 - **Min DC Output** — minimum discharge in watts, to stop this battery's inverter
   switching off at 0 W and falling asleep (see
   [MIN_DC_OUTPUT](ct002.md#dc-battery-keep-alive)). Only shown for DC batteries

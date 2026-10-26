@@ -659,7 +659,8 @@ A: In CT002/CT003 mode, check these one at a time:
    cause. Lower the values again if the batteries start to overshoot.
 4. **`MIN_EFFICIENT_POWER`.** When it is set, a load increase first goes to the
    batteries that are already running. Idle batteries start only after the
-   higher demand has lasted for a while. Lower the value if that takes too
+   higher demand has lasted for a while, or as soon as the running ones reach
+   their power limit, and then only for what those can't cover. Lower the value if that takes too
    long (see
    [My second battery never starts](#my-second-battery-never-starts-or-only-some-of-my-batteries-run)).
 
@@ -685,10 +686,10 @@ Choose a value within these limits:
   and half that for batteries grouped in the app. If your batteries have
   different minimums, use the highest. With `0`, a small load is split into shares below the
   B2500's minimum, none of the batteries start, and you import the whole load.
-- Use at most one battery's maximum power divided by 2.4, for example 330 for
-  an 800 W battery. This applies to charging too. With a higher value, the
-  running battery reaches its limit before the next one starts, and the rest
-  is imported or exported.
+- A higher value runs fewer batteries at once. It may exceed a battery's
+  maximum power: when the running battery reaches its limit, or is full or
+  empty, an idle one covers the rest (charging too), so nothing is imported or
+  exported that another battery could cover.
 
 With only Venus batteries, `0` works. Set a value only if you want small loads
 handled by fewer batteries. See
@@ -780,9 +781,9 @@ fix this:
   applies only while demand is low enough to run **one** battery at a time,
   which is what it describes: how long each battery holds the single rotating
   slot. Once demand runs several at once, every turn is a full interval again,
-  so only `0` % still has an effect (it parks a battery whenever the others can
-  cover) — use **Distribution Weight** to divide load between batteries that run
-  together.
+  so only `0` % still has an effect (it makes a battery a backup that covers only
+  what the others can't) — use **Distribution Weight** to divide load between
+  batteries that run together.
 
 See [CT002 / CT003 steering](ct002.md) for details on all three settings.
 
