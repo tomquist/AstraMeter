@@ -65,9 +65,7 @@ TEST(CloudReportingUrl, Hme4IncludesVoltageCurrentAndAmpersand) {
 }
 
 TEST(CloudReportingUrl, Hme3OmitsVoltageCurrentAndKeepsQuirk) {
-  CtMeasurement s = sample();
-  s.ap = -150;
-  s.dp = -90;
+  const CtMeasurement s = sample();
   const std::string url = build_set_ct_reporting_url("eu.hamedata.com", "HME-3", "aabbccddeeff",
                                                      82, 2026, 6, 18, s);
   // Firmware quirk: no '&' between slv and udp.
@@ -75,21 +73,22 @@ TEST(CloudReportingUrl, Hme3OmitsVoltageCurrentAndKeepsQuirk) {
   // HME-3 sends no instantaneous voltage/current.
   EXPECT_EQ(url.find("va="), std::string::npos);
   EXPECT_EQ(url.find("ia="), std::string::npos);
-  // ... and signed powers.
-  EXPECT_NE(url.find("&ap=-150&bp=20&cp=30&dp=-90&"), std::string::npos);
   const std::string tail = "&cz=5&ca=1&cb=2&cc=3&cd=4&dz=-5&da=-1&db=-2&dc=-3&dd=-4";
   EXPECT_EQ(url.compare(url.size() - tail.size(), tail.size(), tail), 0);
 }
 
-TEST(CloudReportingUrl, Hme4SendsPowerMagnitudes) {
+TEST(CloudReportingUrl, SendsSignedPhasesAndZeroTotal) {
   CtMeasurement m = sample();
   m.ap = -150;
   m.bp = 20;
-  m.cp = -70000;
-  m.dp = -200;
-  const std::string url = build_set_ct_reporting_url("eu.hamedata.com", "HME-4", "m", 0, 2026, 6, 18, m);
-  // The unsigned 16-bit cast drops the sign and wraps past 65535.
-  EXPECT_NE(url.find("&ap=150&bp=20&cp=4464&dp=200&"), std::string::npos);
+  m.cp = 30;
+  m.dp = -100;
+  // The device list shows grid = ap + bp + cp + dp: the total would double it,
+  // and a real HME-4's magnitudes would show the export as an import.
+  for (const char *ct_type : {"HME-4", "HME-3"}) {
+    const std::string url = build_set_ct_reporting_url("eu.hamedata.com", ct_type, "m", 0, 2026, 6, 18, m);
+    EXPECT_NE(url.find("&ap=-150&bp=20&cp=30&dp=0&"), std::string::npos) << ct_type;
+  }
 }
 
 TEST(CloudReportingUrl, ReportingFirmwareVersion) {
