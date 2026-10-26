@@ -281,8 +281,8 @@ The app's shared device page sends this to every device it opens, so a CT
 gets it too, two or three times per visit among the `0x03` and `0x12`
 requests. The one payload byte names the cloud server region the account is
 on; an EU account sends `73 06 23 02 00 54`. It is meant for batteries and
-inverters. The meter ignores it, and the app sends it once without waiting
-for an answer.
+inverters. The meter ignores it, and the app neither waits for an answer nor
+retries.
 
 | Byte | App region | Host (API and MQTT broker) |
 |---|---|---|
