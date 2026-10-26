@@ -2,13 +2,13 @@
 
 ## Next
 
+- **Fixed** a battery staying a few dozen watts off its share for good, for example the lightly weighted one charging next to the other with uneven Distribution Weights ([#741](https://github.com/tomquist/astrameter/discussions/741), [#745](https://github.com/tomquist/astrameter/pull/745)).
+
 - **Added** answers to the Marstek app's CT002 **Diagnose** on the ESP32 build: it passes while the board receives meter readings, and fails once they stop, instead of ending in a communication error. To report your real grid voltage and frequency, there and in cloud reporting, set `voltage_sensor_l1`–`l3` and `frequency_sensor` under `ct002:` ([#746](https://github.com/tomquist/astrameter/pull/746)).
 
 - **Added** Bluetooth to the ESP32 build, so the Marstek app adds the board like a real CT002/CT003, with no Marstek login, and shows its live grid power. Set `bluetooth: false` under `ct002:` on a board short of memory ([#713](https://github.com/tomquist/astrameter/pull/713)).
 
 - **Fixed** cloud reporting sending reports the Marstek cloud could not place: they now carry the time slot, date, energy totals and charge/discharge split the way a real CT002/CT003 does, every five minutes. If you set a cloud reporting interval, remove it to use the real CT's 300 seconds ([#744](https://github.com/tomquist/astrameter/pull/744)).
-
-- **Fixed** a battery given a much lower Distribution Weight trickling a few dozen watts, or charging from the other battery after a load drops; it now rests at 0 W until its share is worth steering, such as when the other is full, empty or at its limit ([#741](https://github.com/tomquist/astrameter/discussions/741), [#745](https://github.com/tomquist/astrameter/pull/745)).
 
 - **Fixed** the Marstek app and cloud reporting sending extra requests to a polled power meter, such as a Shelly or an HTTP source, on top of the batteries' own polls; they now reuse the batteries' latest reading ([#698](https://github.com/tomquist/astrameter/pull/698)).
 

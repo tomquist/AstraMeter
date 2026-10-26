@@ -300,16 +300,6 @@ CEILING_TTL_SECONDS = 600.0
 CEILING_RETEST_SECONDS = 60.0
 CEILING_RETEST_PUSH_W = 30.0
 
-# Standby (discussion #741).  A battery weighted lighter than another in the
-# pool whose share of the load is under ``balance_deadband`` idles at exactly
-# 0 W instead of taking a sliver the firmware cannot follow anyway; with
-# weights such as 10 / 0.1 that is what makes one battery the priority and the
-# other an overflow.  It rejoins once its share grows, i.e. once the heavier
-# batteries reach a ceiling, or at once when one of them reaches this
-# saturation score (full, empty or limited from outside), the efficiency
-# rotation's default swap threshold.
-STANDBY_RELEASE_SATURATION = 0.4
-
 # ---------------------------------------------------------------------------
 # Device capabilities — every device-type decision (AC-charge eligibility, the
 # MIN_DC_OUTPUT wake floor) derives from these, never from ad-hoc prefix checks.
@@ -2199,8 +2189,6 @@ class LoadBalancer:
                 eff_part[cid] = 0.0
         if consumer_id and faded_adjustments.get(consumer_id) == 0.0:
             return self._steer_to_zero(consumer_id, reports, paced=True)
-        if consumer_id and self._standby(consumer_id, reports, control_grid, eff_part):
-            return self._steer_to_zero(consumer_id, reports, paced=True)
 
         residual = self._residual_share(
             consumer_id, reports, control_grid, eff_part, charge_blind
@@ -2218,63 +2206,6 @@ class LoadBalancer:
             eff_part,
             pace=True,
         )
-
-    def _standby(
-        self,
-        consumer_id: str,
-        reports: Reports,
-        control_grid: float,
-        eff_part: dict[str, float],
-    ) -> bool:
-        """Whether *consumer_id* idles at 0 W rather than take its share.
-
-        Only a battery weighted lighter than another in the pool, and only
-        while its weight-proportional share of what the pool should output
-        (its output plus the grid error, water-filled against the learned
-        ceilings) is under ``balance_deadband``.  Balancing would leave it
-        wherever it stalled inside the firmware deadband, and the slow pull it
-        gets as the overflow battery turns a swing from load to surplus into
-        one battery charging from the other (discussion #741).  Equal weights
-        never qualify, so a pool split evenly is untouched.
-
-        A share past a heavier battery's ceiling is large by construction, so
-        the overflow still rejoins on its own; a heavier battery that stopped
-        following (``STANDBY_RELEASE_SATURATION``) lets it in at once.  A
-        DC-only battery cannot be steered to 0 W and never qualifies.
-        """
-        cfg = self._cfg
-        if not cfg.fair_distribution or cfg.balance_deadband <= 0:
-            return False
-        report = _report_of(reports, consumer_id)
-        if not _is_ac_chargeable(report.device_type):
-            return False
-        pool = [
-            cid
-            for cid in reports
-            if eff_part.get(cid, 0.0) > 0.1 and reports[cid].weight > 0.0
-        ]
-        if consumer_id not in pool:
-            return False
-        if not any(reports[cid].weight > report.weight for cid in pool):
-            return False
-        for cid in pool:
-            state = self._consumers.get(cid)
-            if (
-                reports[cid].weight > report.weight
-                and state is not None
-                and state.saturation_score >= STANDBY_RELEASE_SATURATION
-            ):
-                return False
-        intended = sum(reports[cid].power for cid in pool) + control_grid
-        weights = {cid: reports[cid].weight for cid in pool}
-        share = capped_weighted_share(
-            intended,
-            weights,
-            pool,
-            self._ceilings(pool, _sign(intended)),
-            consumer_id,
-        )
-        return abs(share) < cfg.balance_deadband
 
     def _residual_share(
         self,
@@ -2845,6 +2776,14 @@ class LoadBalancer:
             boost = min(err_abs / cfg.error_boost_threshold, 1.0) * cfg.error_boost_max
             gain = gain * (1.0 + boost)
         correction = gain * error
+        # The deadband check above decided this imbalance is worth correcting.
+        # A correction smaller than the deadband would land inside the
+        # firmware's own input deadband and be ignored, leaving the battery
+        # stalled tens of watts off its share for good (discussion #741), so
+        # send at least that much, never more than the imbalance itself.
+        floor = min(cfg.balance_deadband, err_abs)
+        if abs(correction) < floor:
+            correction = floor if error > 0 else -floor
         if cfg.max_correction_per_step > 0:
             cap = cfg.max_correction_per_step
             correction = max(-cap, min(cap, correction))

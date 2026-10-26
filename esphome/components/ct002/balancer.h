@@ -133,10 +133,6 @@ inline constexpr double CEILING_TTL_SECONDS = 600.0;
 // (confirming it) or moves past it (dropping it); issue #704.
 inline constexpr double CEILING_RETEST_SECONDS = 60.0;
 inline constexpr float CEILING_RETEST_PUSH_W = 30.0f;
-// A battery weighted lighter than another whose share is under the balance
-// deadband idles at 0 W (standby, discussion #741); it rejoins at once when a
-// heavier battery reaches this saturation score. Mirrors balancer.py.
-inline constexpr double STANDBY_RELEASE_SATURATION = 0.4;
 
 // Device capabilities — the single source of truth for every device-type
 // decision (mirrors balancer.py device_capabilities). All downstream policy
@@ -690,10 +686,6 @@ class LoadBalancer {
   std::array<float, 3> fading_target_(const std::string &consumer_id,
                                       const ReportMap &reports, float grid_total,
                                       const std::unordered_map<std::string, float> &eff_part);
-  // Whether a lighter-weighted battery idles at 0 W rather than take a share
-  // under the balance deadband. Mirrors balancer.py _standby.
-  bool standby_(const std::string &consumer_id, const ReportMap &reports, float control_grid,
-                const std::unordered_map<std::string, float> &eff_part) const;
   // This consumer's slice of the grid imbalance: a grid-tracking term clamped
   // against the grid direction, plus a grid-neutral balancing term that is not.
   // Mirrors balancer.py _residual_share.

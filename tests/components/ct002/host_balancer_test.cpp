@@ -226,36 +226,23 @@ TEST(LoadBalancer, AutoSplitHonoursDistributionWeight) {
   EXPECT_FLOAT_EQ(b_out[0], 200.0f);
 }
 
-// A battery weighted lighter than another idles at exactly 0 W while its share
-// is under the balance deadband (discussion #741). Mirrors
-// tests/test_balancer_standby.py.
-TEST(LoadBalancer, LighterBatteryIdlesAtZeroUnderTheDeadband) {
+// An imbalance worth correcting is corrected by at least the balance deadband,
+// never by a step the firmware ignores (discussion #741). Mirrors
+// tests/test_balancer_min_correction.py.
+TEST(LoadBalancer, BalanceCorrectionIsAtLeastTheDeadband) {
   BalancerConfig cfg;
   cfg.pace_base_step = 0.0f;
   cfg.osc_damp_max = 0.0f;
   cfg.grid_predict_trust = 0.0f;
   cfg.import_trim_w = 0.0f;
+  cfg.concentrate_deadband = 0.0f;
   auto b = make_balancer(cfg);
   ReportMap reports;
-  // Stalled at 64 W charge next to a priority unit taking the surplus: a
-  // reading of +64 W lands it on 0 W.
+  // 64 W charging against a share of about 13 W: the gain alone would send ~12 W.
   reports["a"] = ConsumerReport{"VNSE3", "A", -1252.0f, 10.0f};
   reports["b"] = ConsumerReport{"VNSE3", "A", -64.0f, 0.1f};
-  auto out = b.compute_target("b", ConsumerMode{}, reports, -10.0f, {}, {}, {});
-  EXPECT_NEAR(out[0] + out[1] + out[2], 64.0f, 0.5f);
-  // Discharging past the priority unit's limit when the load turns to surplus:
-  // it stops on the next poll.
-  reports["a"] = ConsumerReport{"VNSE3", "A", 800.0f, 10.0f};
-  reports["b"] = ConsumerReport{"VNSE3", "A", 900.0f, 0.1f};
-  out = b.compute_target("b", ConsumerMode{}, reports, -1450.0f, {}, {}, {});
-  EXPECT_NEAR(out[0] + out[1] + out[2], -900.0f, 0.5f);
-  // Equal weights never idle this way.
-  reports["a"] = ConsumerReport{"VNSE3", "A", 10.0f, 1.0f};
-  reports["b"] = ConsumerReport{"VNSE3", "A", 10.0f, 1.0f};
-  cfg.concentrate_deadband = 0.0f;
-  auto even = make_balancer(cfg);
-  out = even.compute_target("b", ConsumerMode{}, reports, 20.0f, {}, {}, {});
-  EXPECT_GT(out[0] + out[1] + out[2], 0.0f);
+  const auto out = b.compute_target("b", ConsumerMode{}, reports, 0.0f, {}, {}, {});
+  EXPECT_NEAR(out[0] + out[1] + out[2], 25.0f, 0.5f);
 }
 
 TEST(LoadBalancer, ZeroWeightTakesNoShare) {

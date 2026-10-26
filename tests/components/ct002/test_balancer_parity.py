@@ -569,14 +569,14 @@ def _scenario_power_ceilings() -> list[str]:
     return lines
 
 
-def _scenario_standby() -> list[str]:
-    """A priority battery and a 0.1-weight overflow (discussion #741).
+def _scenario_skewed_weights() -> list[str]:
+    """Distribution weights of 10 and 0.1 (discussion #741).
 
-    The overflow starts stalled at a small charge and must be sent to 0 W; the
-    priority unit then runs into its charge ceiling, which both stacks learn,
-    and the overflow takes the rest.  A swing to load turns the shares around,
-    and a priority unit that stops following lets the overflow back in.  A
-    DC-only light unit never idles this way.
+    The light unit starts stalled tens of watts off its share and must be
+    corrected by more than the firmware deadband; the heavy unit then runs
+    into its charge ceiling, which both stacks learn, and the light one takes
+    the rest.  A swing to load turns the shares around, the heavy unit then
+    stops following, and a DC-only light unit closes the scenario.
     """
     lines = ["cfg 1 0 900 0.4 0.15 20 90 1 0 0 0", "clock 5000"]
 
@@ -612,9 +612,9 @@ def _scenario_standby() -> list[str]:
     return lines
 
 
-def test_parity_standby(harness: Path) -> None:
-    lines = _scenario_standby()
-    _compare("standby", lines, _run_cpp(harness, lines), _run_py(lines))
+def test_parity_skewed_weights(harness: Path) -> None:
+    lines = _scenario_skewed_weights()
+    _compare("skewed_weights", lines, _run_cpp(harness, lines), _run_py(lines))
 
 
 def test_parity_power_ceilings(harness: Path) -> None:
@@ -714,7 +714,7 @@ def _random_stream(seed: int, n_polls: int) -> list[str]:
     eff_weights = {cid: rng.choice([1.0, 1.0, 1.0, 0.0, 0.5, 0.25]) for cid in cids}
     # Distribution weights, drawn from their own generator so the streams the
     # draws above produce stay as they were: mostly neutral, sometimes a
-    # priority / overflow split (standby) or a parked unit.
+    # strongly skewed split or a parked unit.
     wrng = random.Random(seed + 1_000_000)
     weights = {cid: wrng.choice([1.0, 1.0, 1.0, 10.0, 0.1, 0.5, 0.0]) for cid in cids}
     for _ in range(n_polls):
