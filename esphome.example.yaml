@@ -90,6 +90,11 @@ ct002:
   # All keys below are optional; shown at their defaults.
   # power_sensor_l2: grid_l2       # three-phase only (set together with l3)
   # power_sensor_l3: grid_l3
+  # voltage_sensor_l1: grid_v_l1   # optional grid voltage per phase (V) and
+  # voltage_sensor_l2: grid_v_l2   # frequency (Hz). Not used for steering:
+  # voltage_sensor_l3: grid_v_l3   # the app's CT002 Diagnose and cloud
+  # frequency_sensor: grid_hz      # reporting report them (see
+  #                                # docs/esphome-powermeters.md)
   # ct_type: HME-4                 # HME-4 emulates a CT002, HME-3 a CT003.
   #                                # (The Python add-on has no ct_type option —
   #                                #  it derives this from DEVICE_TYPE=ct002/

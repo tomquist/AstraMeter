@@ -263,8 +263,8 @@ which app screens send the command, where known.
 | `0x11` | – | ✓ | 4 bytes | 1-byte result | CT003 meter configuration |
 | `0x12` | ✓ | ✓ | `00` | ASCII list of linked batteries, see [`0x12`](#0x12--linked-batteries) | CT screens |
 | `0x13` | ✓ | – | ignored | 3 × uint16 + 1 byte | CT002 diagnostics (voltage) |
-| `0x14` | ✓ | – | `01` | frequency check | CT002 diagnostics |
-| `0x15` | ✓ | – | `01` | 3 × int16 + 1 byte | CT002 diagnostics (voltage phase angle) |
+| `0x14` | ✓ | – | `01` | uint16 + 1 byte | CT002 diagnostics (frequency) |
+| `0x15` | ✓ | – | `01` | 3 × uint16 + 1 byte | CT002 diagnostics (voltage phase angle) |
 | `0x16` | ✓ | – | `01` | 3 × int16 | CT002 diagnostics (active power) |
 | `0x17` | ✓ | – | direction bits | the bits in effect | CT002 current-direction reverse |
 | `0x18` | – | ✓ | – | – | unknown |
@@ -384,27 +384,34 @@ type=<battery type>,sid=<battery id>,ip=<battery IP>,phpos=<phase letter>;
 
 ### `0x13`–`0x17` — CT002 diagnostics
 
-These back the CT002 diagnostics screens.
+These back the CT002's **Diagnose** screen, which runs `0x13`, `0x14`, `0x15`
+and `0x16` in that order. All values are little-endian.
 
 - `0x13` checks the grid voltage. The reply payload is the voltages of phases
-  A, B and C as little-endian `uint16` in whole volts (bytes 4–9), then one
-  result byte (byte 10): `1` when every phase is between 210 and 240 V,
-  otherwise `0`. The v124 firmware ignores the request payload. The app reports
-  the values as its "voltage" check.
-
-- `0x14` reads the grid frequency and checks it against 45.00–55.00 Hz
-  (apparently held in 0.01 Hz).
-- `0x15` returns three signed 16-bit per-phase values plus one byte. The app
-  labels this check "voltage phase angle".
+  A, B and C as `uint16` in whole volts (bytes 4–9), then one result byte
+  (byte 10): `1` when every phase is between 210 and 240 V, otherwise `0`. The
+  v124 firmware ignores the request payload.
+- `0x14` checks the grid frequency: a `uint16` in 0.01 Hz (bytes 4–5), then one
+  result byte (byte 6): `1` from 45.00 to 55.00 Hz, otherwise `0`.
+- `0x15` checks the angles between the phase voltages: three `uint16` in whole
+  degrees (bytes 4–9), then one result byte (byte 10): `0` when all three are
+  between 110 and 130° or all between 230 and 250°, otherwise `3`.
 - `0x16` returns three signed 16-bit per-phase active powers.
+
+The screen shows only the four check names, a pass or fail for each, and
+"Diagnosis Passed" at the end; the values go to the app's debug log. It
+passes when the voltage and frequency results are `1`, the phase-angle result
+is `0`, and `0x16` answers at all. On a failure the app shows a fixed message
+for the first failing check, such as "voltage abnormal, check that the device
+is connected to the three-phase grid", and uploads the diagnostic values to
+Marstek. A check that gets no answer ends in "communication error during
+diagnosis, retry?", with no upload.
 - `0x17` sets which phases have their current direction reversed. The payload is
   one byte with bit 0 = A, bit 1 = B and bit 2 = C. The v124 firmware applies
   a value of 0–7, saves it to flash, ignores anything larger, and answers with
   one byte: the bits now in effect. The app takes any answer as success and
   reads the current setting from byte 22 of the status reply. The MQTT
   equivalent is `cd=5,dir=<bits>`.
-
-The exact field layouts of the `0x14` and `0x15` replies are unconfirmed.
 
 ### Not covered
 
@@ -540,12 +547,12 @@ from the start is better fixed on the sensor, for example with
 | `0x08` read SSID | The network the app sent during the current connection, otherwise the one the board is connected to |
 | `0x06`, `0x09` | Restart the board. Its configuration is untouched |
 | `0x12` linked batteries | The batteries currently polling the board, as many whole entries as fit one notification at the negotiated MTU |
+| `0x13`–`0x15` diagnostics (CT002) | While the meter delivers readings: the optional `voltage_sensor_l1`–`l3` and `frequency_sensor` readings, which pass only within the meter's ranges (210–240 V, 45–55 Hz), and 230 V, 50.00 Hz and 120° between phases for whatever has no sensor or no fresh reading, which always pass. Once no power reading has arrived within `max_sensor_age`: zeros with failing results, as a meter without input reports (see [grid voltage and frequency](esphome-powermeters.md#optional-grid-voltage-and-frequency)) |
 | `0x16` active power (CT002) | The three phase powers |
 | `0x17` direction (CT002) | With `allow_direction_change: true`: applies values 0–7 (bits 0–2) and answers with the bits in effect (see [above](#reversing-a-phase-from-the-app)); otherwise no answer |
 
-Everything else, such as calibration, the
-voltage, frequency and phase-angle checks, CT003 meter configuration and
-firmware updates, gets no reply. The app reports those
+Everything else, such as calibration, CT003 meter configuration and firmware
+updates, gets no reply. The app reports those
 buttons as failed. They have nothing to act on in an emulator, whose polarity
 and meter come from its YAML.
 

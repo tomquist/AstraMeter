@@ -159,12 +159,29 @@ class CT002Component : public Component {
     }
     return freshest;
   }
+  uint32_t max_sensor_age_ms() const { return this->max_sensor_age_ms_; }
+  /// Latest reading of the optional voltage sensor of phase idx (V) or of
+  /// the frequency sensor (Hz), or nothing without the sensor or a reading
+  /// within max_sensor_age.
+  optional<float> grid_voltage(uint8_t idx) const {
+    if (idx >= 3) return {};
+    return this->fresh_reading_(this->voltage_values_[idx], this->voltage_stamp_ms_[idx]);
+  }
+  optional<float> grid_frequency() const {
+    return this->fresh_reading_(this->frequency_value_, this->frequency_stamp_ms_);
+  }
   float get_setup_priority() const override { return setup_priority::AFTER_WIFI; }
 
   // Configuration setters (called from to_code()).
   void set_power_sensor_l1(sensor::Sensor *s) { this->power_sensor_l1_ = s; }
   void set_power_sensor_l2(sensor::Sensor *s) { this->power_sensor_l2_ = s; }
   void set_power_sensor_l3(sensor::Sensor *s) { this->power_sensor_l3_ = s; }
+  // Optional grid readings AstraMeter doesn't steer on. The Bluetooth
+  // diagnostics and cloud reporting report them (see grid_voltage()).
+  void set_voltage_sensor(uint8_t idx, sensor::Sensor *s) {
+    if (idx < 3) this->voltage_sensors_[idx] = s;
+  }
+  void set_frequency_sensor(sensor::Sensor *s) { this->frequency_sensor_ = s; }
   // Per-phase unit→W conversion (issue #572). Called from to_code() when the
   // referenced sensor declares a power unit_of_measurement (kW → 1000, etc.).
   // Declaring any unit — even "W" — also disables the runtime kW-suspicion
@@ -484,6 +501,17 @@ class CT002Component : public Component {
   // Sensor input cache (written by per-sensor on_state callbacks).
   std::array<float, 3> raw_values_{0.0f, 0.0f, 0.0f};
   std::array<uint32_t, 3> raw_stamp_ms_{0, 0, 0};
+  // Optional grid voltage / frequency inputs and their latest readings.
+  std::array<sensor::Sensor *, 3> voltage_sensors_{nullptr, nullptr, nullptr};
+  sensor::Sensor *frequency_sensor_{nullptr};
+  std::array<float, 3> voltage_values_{0.0f, 0.0f, 0.0f};
+  std::array<uint32_t, 3> voltage_stamp_ms_{0, 0, 0};
+  float frequency_value_{0.0f};
+  uint32_t frequency_stamp_ms_{0};
+  optional<float> fresh_reading_(float value, uint32_t stamp_ms) const {
+    if (stamp_ms == 0 || ::esphome::millis() - stamp_ms > this->max_sensor_age_ms_) return {};
+    return value;
+  }
   uint8_t phase_reversal_{0};
   uint8_t num_phases_{0};
 

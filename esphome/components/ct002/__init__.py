@@ -85,6 +85,10 @@ BluetoothComponent = bluetooth_ns.class_("BluetoothComponent", cg.Component)
 CONF_POWER_SENSOR_L1 = "power_sensor_l1"
 CONF_POWER_SENSOR_L2 = "power_sensor_l2"
 CONF_POWER_SENSOR_L3 = "power_sensor_l3"
+CONF_VOLTAGE_SENSOR_L1 = "voltage_sensor_l1"
+CONF_VOLTAGE_SENSOR_L2 = "voltage_sensor_l2"
+CONF_VOLTAGE_SENSOR_L3 = "voltage_sensor_l3"
+CONF_FREQUENCY_SENSOR = "frequency_sensor"
 CONF_CT_TYPE = "ct_type"
 CONF_CT_MAC = "ct_mac"
 CONF_WIFI_RSSI = "wifi_rssi"
@@ -166,6 +170,11 @@ _POWER_SENSOR_KEYS = (
     CONF_POWER_SENSOR_L2,
     CONF_POWER_SENSOR_L3,
 )
+_VOLTAGE_SENSOR_KEYS = (
+    CONF_VOLTAGE_SENSOR_L1,
+    CONF_VOLTAGE_SENSOR_L2,
+    CONF_VOLTAGE_SENSOR_L3,
+)
 
 
 def _power_unit_scale(unit: str | None) -> float | None:
@@ -209,6 +218,24 @@ def _validate_power_unit(conf_key: str, sensor_id, unit: str | None) -> None:
             f"in watts. Point it at a sensor reporting {accepted} "
             f"(kW-style units are converted to W automatically), or scale "
             f"the value to W and declare 'W'.",
+            path=[conf_key],
+        )
+
+
+def _validate_grid_unit(
+    conf_key: str, sensor_id, unit: str | None, expected: str
+) -> None:
+    """Raise cv.Invalid when an optional grid sensor declares another unit.
+
+    The voltage and frequency inputs are reported as they come, so a sensor
+    in mV or kHz would put a nonsense reading in front of the app and the
+    cloud. Sensors that declare no unit are taken as V / Hz.
+    """
+    if unit and unit != expected:
+        raise cv.Invalid(
+            f"{conf_key} '{sensor_id}' declares unit_of_measurement '{unit}', "
+            f"but ct002 reads it in {expected}. Point it at a sensor reporting "
+            f"{expected}, or scale the value and declare '{expected}'.",
             path=[conf_key],
         )
 
@@ -443,6 +470,17 @@ def _final_validate(config):
         if conf_key in config:
             _validate_power_unit(
                 conf_key, config[conf_key], _declared_unit(full, config[conf_key])
+            )
+    for conf_key, expected in (
+        *((key, "V") for key in _VOLTAGE_SENSOR_KEYS),
+        (CONF_FREQUENCY_SENSOR, "Hz"),
+    ):
+        if conf_key in config:
+            _validate_grid_unit(
+                conf_key,
+                config[conf_key],
+                _declared_unit(full, config[conf_key]),
+                expected,
             )
     _final_validate_dashboard_path(config, full)
     # Strictly after the path is settled: the link points at wherever the
@@ -1074,6 +1112,12 @@ CONFIG_SCHEMA = cv.All(
             cv.Required(CONF_POWER_SENSOR_L1): cv.use_id(sensor.Sensor),
             cv.Optional(CONF_POWER_SENSOR_L2): cv.use_id(sensor.Sensor),
             cv.Optional(CONF_POWER_SENSOR_L3): cv.use_id(sensor.Sensor),
+            # Optional grid readings AstraMeter doesn't steer on: the
+            # CT002's Bluetooth diagnostics and cloud reporting report them.
+            cv.Optional(CONF_VOLTAGE_SENSOR_L1): cv.use_id(sensor.Sensor),
+            cv.Optional(CONF_VOLTAGE_SENSOR_L2): cv.use_id(sensor.Sensor),
+            cv.Optional(CONF_VOLTAGE_SENSOR_L3): cv.use_id(sensor.Sensor),
+            cv.Optional(CONF_FREQUENCY_SENSOR): cv.use_id(sensor.Sensor),
             cv.Optional(CONF_CT_TYPE, default="HME-4"): cv.one_of(
                 "HME-4", "HME-3", upper=True
             ),
@@ -1129,6 +1173,13 @@ async def to_code(config):
         sensor_l3 = await cg.get_variable(config[CONF_POWER_SENSOR_L3])
         cg.add(var.set_power_sensor_l2(sensor_l2))
         cg.add(var.set_power_sensor_l3(sensor_l3))
+    for idx, conf_key in enumerate(_VOLTAGE_SENSOR_KEYS):
+        if conf_key in config:
+            voltage = await cg.get_variable(config[conf_key])
+            cg.add(var.set_voltage_sensor(idx, voltage))
+    if CONF_FREQUENCY_SENSOR in config:
+        frequency = await cg.get_variable(config[CONF_FREQUENCY_SENSOR])
+        cg.add(var.set_frequency_sensor(frequency))
 
     # Unit → watts conversion (issue #572). A declared power unit yields a
     # per-phase scale; declaring any unit (even W) also disables the runtime

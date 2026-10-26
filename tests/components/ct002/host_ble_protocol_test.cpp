@@ -310,9 +310,128 @@ TEST(BleDiagnostics, Ct002ActivePowerIsThreeSignedPhases) {
   EXPECT_EQ(le16(f, 8), 0);
 }
 
+static Snapshot diagnose_snapshot(bool meter_live) {
+  Snapshot s = ct002_snapshot();
+  s.meter_live = meter_live;
+  return s;
+}
+
+TEST(BleDiagnostics, VoltageCheckPassesWhileTheMeterDelivers) {
+  Responder responder;
+  const auto f = responder.handle(request(CMD_VOLTAGE_CHECK, {0x01}), diagnose_snapshot(true)).reply;
+  expect_valid_reply(f, CMD_VOLTAGE_CHECK);
+  // Three phases in whole volts, then the result byte the app needs at 1.
+  ASSERT_EQ(f.size(), 12u);
+  EXPECT_EQ(le16(f, 4), 230);
+  EXPECT_EQ(le16(f, 6), 230);
+  EXPECT_EQ(le16(f, 8), 230);
+  EXPECT_EQ(f[10], 1);
+}
+
+TEST(BleDiagnostics, FrequencyCheckPassesWhileTheMeterDelivers) {
+  Responder responder;
+  const auto f = responder.handle(request(CMD_FREQUENCY_CHECK, {0x01}), diagnose_snapshot(true)).reply;
+  expect_valid_reply(f, CMD_FREQUENCY_CHECK);
+  // 0.01 Hz, then the result byte the app needs at 1.
+  ASSERT_EQ(f.size(), 8u);
+  EXPECT_EQ(le16(f, 4), 5000);
+  EXPECT_EQ(f[6], 1);
+}
+
+TEST(BleDiagnostics, PhaseAngleCheckPassesWhileTheMeterDelivers) {
+  Responder responder;
+  const auto f = responder.handle(request(CMD_PHASE_ANGLE_CHECK, {0x01}), diagnose_snapshot(true)).reply;
+  expect_valid_reply(f, CMD_PHASE_ANGLE_CHECK);
+  // Three angles in degrees, then the result byte, which passes at 0.
+  ASSERT_EQ(f.size(), 12u);
+  EXPECT_EQ(le16(f, 4), 120);
+  EXPECT_EQ(le16(f, 6), 120);
+  EXPECT_EQ(le16(f, 8), 120);
+  EXPECT_EQ(f[10], 0);
+}
+
+TEST(BleDiagnostics, ChecksFailWithoutAMeterReading) {
+  // What a real CT002 reports with nothing on its inputs.
+  Responder responder;
+  const Snapshot s = diagnose_snapshot(false);
+  const auto v = responder.handle(request(CMD_VOLTAGE_CHECK, {0x01}), s).reply;
+  ASSERT_EQ(v.size(), 12u);
+  EXPECT_EQ(le16(v, 4), 0);
+  EXPECT_EQ(v[10], 0);
+  const auto f = responder.handle(request(CMD_FREQUENCY_CHECK, {0x01}), s).reply;
+  ASSERT_EQ(f.size(), 8u);
+  EXPECT_EQ(le16(f, 4), 0);
+  EXPECT_EQ(f[6], 0);
+  const auto a = responder.handle(request(CMD_PHASE_ANGLE_CHECK, {0x01}), s).reply;
+  ASSERT_EQ(a.size(), 12u);
+  EXPECT_EQ(le16(a, 4), 0);
+  EXPECT_EQ(a[10], 3);
+}
+
+TEST(BleDiagnostics, ReportsTheVoltageSensorsAndFallsBackPerPhase) {
+  // L1 has a sensor, L2/L3 don't: the reading for L1, a passing 230 V for the
+  // rest, and the meter's 210-240 V rule on what goes out.
+  Responder responder;
+  Snapshot s = diagnose_snapshot(true);
+  s.voltage_v[0] = 233.6f;
+  const auto f = responder.handle(request(CMD_VOLTAGE_CHECK, {0x01}), s).reply;
+  ASSERT_EQ(f.size(), 12u);
+  EXPECT_EQ(le16(f, 4), 234);
+  EXPECT_EQ(le16(f, 6), 230);
+  EXPECT_EQ(le16(f, 8), 230);
+  EXPECT_EQ(f[10], 1);
+}
+
+TEST(BleDiagnostics, AVoltageOutsideTheMetersRangeFails) {
+  Responder responder;
+  Snapshot s = diagnose_snapshot(true);
+  s.voltage_v = {229.0f, 244.0f, 231.0f};
+  const auto f = responder.handle(request(CMD_VOLTAGE_CHECK, {0x01}), s).reply;
+  EXPECT_EQ(le16(f, 6), 244);
+  EXPECT_EQ(f[10], 0);
+  s.voltage_v = {210.0f, 240.0f, 225.0f};  // the bounds pass
+  EXPECT_EQ(responder.handle(request(CMD_VOLTAGE_CHECK, {0x01}), s).reply[10], 1);
+}
+
+TEST(BleDiagnostics, ReportsTheFrequencySensorWithTheMetersRange) {
+  Responder responder;
+  Snapshot s = diagnose_snapshot(true);
+  s.frequency_hz = 49.97f;
+  auto f = responder.handle(request(CMD_FREQUENCY_CHECK, {0x01}), s).reply;
+  EXPECT_EQ(le16(f, 4), 4997);
+  EXPECT_EQ(f[6], 1);
+  s.frequency_hz = 55.01f;
+  f = responder.handle(request(CMD_FREQUENCY_CHECK, {0x01}), s).reply;
+  EXPECT_EQ(le16(f, 4), 5501);
+  EXPECT_EQ(f[6], 0);
+}
+
+TEST(BleDiagnostics, SensorReadingsDontPassWithoutTheMeter) {
+  Responder responder;
+  Snapshot s = diagnose_snapshot(false);
+  s.voltage_v = {230.0f, 230.0f, 230.0f};
+  s.frequency_hz = 50.0f;
+  const auto v = responder.handle(request(CMD_VOLTAGE_CHECK, {0x01}), s).reply;
+  EXPECT_EQ(le16(v, 4), 0);
+  EXPECT_EQ(v[10], 0);
+  const auto f = responder.handle(request(CMD_FREQUENCY_CHECK, {0x01}), s).reply;
+  EXPECT_EQ(le16(f, 4), 0);
+  EXPECT_EQ(f[6], 0);
+}
+
+TEST(BleDiagnostics, VoltageCheckIgnoresTheRequestPayload) {
+  Responder responder;
+  const auto f = responder.handle(request(CMD_VOLTAGE_CHECK, {}), diagnose_snapshot(true)).reply;
+  expect_valid_reply(f, CMD_VOLTAGE_CHECK);
+  EXPECT_EQ(f[10], 1);
+}
+
 TEST(BleDiagnostics, Ct003HasNoPhaseDiagnostics) {
   Responder responder;
-  EXPECT_TRUE(responder.handle(request(CMD_ACTIVE_POWER, {0x01}), ct003_snapshot()).reply.empty());
+  for (uint8_t cmd : {CMD_VOLTAGE_CHECK, CMD_FREQUENCY_CHECK, CMD_PHASE_ANGLE_CHECK, CMD_ACTIVE_POWER}) {
+    EXPECT_TRUE(responder.handle(request(cmd, {0x01}), ct003_snapshot()).reply.empty()) << "cmd 0x" << std::hex
+                                                                                          << int(cmd);
+  }
 }
 
 // ── Current-direction reversal (0x17) ───────────────────────────────────
@@ -380,7 +499,7 @@ TEST(BleReset, ResetAndRebootRestartWithoutReplying) {
 
 TEST(BleUnknown, UnhandledCommandsGetNoReply) {
   Responder responder;
-  for (uint8_t cmd : {0x07, 0x10, 0x11, 0x14, 0x15, 0x17, 0x50, 0x51}) {
+  for (uint8_t cmd : {0x07, 0x10, 0x11, 0x17, 0x50, 0x51}) {
     const auto result = responder.handle(request(cmd, {0x01}), ct002_snapshot());
     EXPECT_TRUE(result.reply.empty()) << "cmd 0x" << std::hex << int(cmd);
     EXPECT_EQ(result.action, Action::NONE);

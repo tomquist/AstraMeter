@@ -350,8 +350,9 @@ after 60 s, and picks the `HME-4`/`HME-3` field layout and power sign from the
 emulated `ct_type`. `timeNo` and `date` come from the handshake's server time
 (the local clock only when the body carries none). It fills the fields
 AstraMeter knows (per‑phase power, the bucket fields, RSSI, slave count, link
-flags) and zero‑fills V/I on `HME-4`. Having no energy counter, it integrates
-the grid power it samples every 10 s into one — net for `HME-4`, import only for
+flags) and zero‑fills V/I on `HME-4`, except that the ESPHome build sends the
+optional `voltage_sensor_l1`–`l3` readings as `va`/`vb`/`vc`. Having no energy
+counter, it integrates the grid power it samples every 10 s into one — net for `HME-4`, import only for
 `HME-3` — and keeps `eled`/`elet` from it as in §6.4. The reported `id` is the
 CT's MAC. When a Marstek account is configured (the `[MARSTEK]` section, or the
 ESPHome `marstek_registration:` block), it uses the MAC of the device AstraMeter

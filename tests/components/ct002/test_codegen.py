@@ -171,6 +171,22 @@ def test_validate_power_unit_rejects_energy_unit() -> None:
         ct002_component._validate_power_unit("power_sensor_l2", "meter_total", "kWh")
 
 
+def test_validate_grid_unit_accepts_its_unit_and_undeclared() -> None:
+    ct002_component._validate_grid_unit("voltage_sensor_l1", "grid_v", "V", "V")
+    ct002_component._validate_grid_unit("voltage_sensor_l1", "grid_v", None, "V")
+    ct002_component._validate_grid_unit("frequency_sensor", "grid_hz", "Hz", "Hz")
+
+
+def test_validate_grid_unit_rejects_another_unit() -> None:
+    import esphome.config_validation as cv
+
+    with pytest.raises(cv.Invalid) as exc_info:
+        ct002_component._validate_grid_unit("voltage_sensor_l2", "grid_v", "mV", "V")
+    assert "reads it in V" in str(exc_info.value)
+    with pytest.raises(cv.Invalid):
+        ct002_component._validate_grid_unit("frequency_sensor", "grid_hz", "kHz", "Hz")
+
+
 def test_mqtt_insights_device_id_defaults_to_python_default() -> None:
     # A blank device_id must fall back to the same default the Python add-on
     # uses, so both stacks publish HA discovery under astrameter_ct002_device-1
