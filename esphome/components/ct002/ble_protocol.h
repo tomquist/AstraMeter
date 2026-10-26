@@ -52,7 +52,7 @@ enum Command : uint8_t {
 inline constexpr uint8_t CMD_SET_SERVER_REGION = 0x02;
 
 // What a CMD_SET_SERVER_REGION byte selects: the app's region name and the
-// host that region's API and MQTT broker run on.
+// API host the app uses for that region.
 struct ServerRegion {
   const char *name;
   const char *host;

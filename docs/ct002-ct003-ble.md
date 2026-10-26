@@ -287,7 +287,7 @@ on; an EU account sends `73 06 23 02 00 54`. It is meant for batteries and
 inverters. The meter ignores it, and the app neither waits for an answer nor
 retries.
 
-| Byte | App region | Host (API and MQTT broker) |
+| Byte | App region | App API host |
 |---|---|---|
 | `0x00` | EU | `eu.hamedata.com` |
 | `0x02` | China, Hong Kong/Macau, or any other region | `us.hamedata.com` |
@@ -300,6 +300,8 @@ retries.
 - The app never sends `0x01`. The US host is reached through `0x02`.
 - Venus models get the same values over MQTT instead while MQTT is connected,
   as decimal text in `cd=12,ht=<n>`.
+- The hosts are the app's API servers. The app also lists brokers under the
+  same names, but a meter ignores this byte, so its broker doesn't follow it.
 
 ### `0x03` — status
 
