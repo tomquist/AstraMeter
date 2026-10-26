@@ -1,8 +1,9 @@
 import argparse
+import asyncio
 from dataclasses import replace
 from ipaddress import IPv4Network
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 from astrameter.config.config_loader import (
     ClientFilter,
@@ -13,6 +14,7 @@ from astrameter.config.ini_config import IniAppConfig
 from astrameter.config.settings import ConfiguredPowermeter, SignalSettings
 from astrameter.ct002.ct002 import CT002, PhaseBucket
 from astrameter.main import (
+    _bind_marstek_responder,
     _ct_measurement,
     _passive_grid_phases,
     _resolve_device_config,
@@ -63,6 +65,30 @@ def test_cloud_measurement_maps_buckets_like_a_real_ct() -> None:
     assert (m.cz, m.ca, m.cb, m.cc, m.cd) == (10, 20, 30, 40, 50)
     assert (m.dz, m.da, m.db, m.dc, m.dd) == (-10, -20, -30, -40, -50)
     assert (m.rssi, m.slv, m.udp, m.mqtt) == (-60, 2, 1, 1)
+
+
+def test_marstek_responder_reports_the_models_firmware_version() -> None:
+    """``ver_v`` is the CT's firmware version, the same constant it sends as the
+    handshake's ``sv``, not the cloud record's ``version``."""
+    bindings: list[Any] = []
+
+    async def register_marstek(binding: Any) -> None:
+        bindings.append(binding)
+
+    insights = SimpleNamespace(register_marstek=register_marstek)
+    for ct_type, expected in (("HME-4", 124), ("HME-3", 122)):
+        device = SimpleNamespace(
+            ct_type=ct_type,
+            wifi_rssi=-50,
+            reporting_consumer_count=lambda: 0,
+            reporting_consumer_rows=lambda: (),
+        )
+        asyncio.run(
+            _bind_marstek_responder(
+                cast(Any, insights), cast(CT002, device), "d", [], "02b250aabbcc"
+            )
+        )
+        assert bindings[-1].ver_v == expected
 
 
 _LOCAL = ClientFilter([IPv4Network("127.0.0.1/32")])

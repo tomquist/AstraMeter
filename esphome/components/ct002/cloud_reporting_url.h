@@ -16,7 +16,8 @@ namespace ct002 {
 namespace cloud_reporting {
 
 // The live values a CT puts in a `setCtReporting` GET. Powers are watts, signed
-// (import positive); the URL builder applies the model's wire cast. `c*` and
+// (import positive); `dp` is the total, which only the energy register uses
+// (the URL builder sends 0). `c*` and
 // `d*` are the bucket fields in x/A/B/C/ABC order (z<->x unassigned, d<->ABC
 // combined): `c*` carries the UDP response's `*_dchrg_power` and `d*` its
 // `*_chrg_power`, which is where both images read them from. `va/vb/vc` (volts)
@@ -86,8 +87,10 @@ std::string build_get_date_info_url(const std::string &host, const std::string &
                                     const std::string &fcv, const std::string &aid, int sv);
 
 // Build the `setCtReporting` GET for *ct_type* ("HME-4" or "HME-3"), reproducing
-// the firmware templates field-for-field, including the model differences
-// (HME-4 sends power magnitudes) and the HME-3 missing-`&` slv/udp quirk.
+// the firmware templates field-for-field, including the model differences and
+// the HME-3 missing-`&` slv/udp quirk. Unlike a real CT, `dp` goes out as 0 and
+// powers keep their sign: the device list shows grid = ap + bp + cp + dp, so the
+// total would double it and HME-4's magnitudes would show an export as import.
 std::string build_set_ct_reporting_url(const std::string &host, const std::string &ct_type,
                                        const std::string &device_id, int64_t time_no, int year,
                                        int month, int day, const CtMeasurement &m);

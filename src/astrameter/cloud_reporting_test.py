@@ -84,17 +84,19 @@ def test_set_ct_reporting_hme4_includes_voltage_current() -> None:
     assert "eled=111&elet=222" in url
 
 
-def test_set_ct_reporting_hme4_sends_power_magnitudes() -> None:
+@pytest.mark.parametrize("ct_type", ["HME-4", "HME-3"])
+def test_set_ct_reporting_sends_signed_phases_and_zero_total(ct_type: str) -> None:
     url = build_set_ct_reporting_url(
         "eu.hamedata.com",
-        "HME-4",
+        ct_type,
         device_id="m",
         time_no=0,
         date=_DATE,
-        m=_measurement(ap=-150, bp=20, cp=-70000, dp=-200),
+        m=_measurement(ap=-150, bp=20, cp=30, dp=-100),
     )
-    # The unsigned 16-bit cast drops the sign and wraps past 65535.
-    assert "&ap=150&bp=20&cp=4464&dp=200&" in url
+    # The device list shows grid = ap + bp + cp + dp: the total would double
+    # it, and a real HME-4's magnitudes would show the export as an import.
+    assert "&ap=-150&bp=20&cp=30&dp=0&" in url
 
 
 def test_set_ct_reporting_hme3_omits_vi_and_keeps_missing_amp_quirk() -> None:
@@ -104,13 +106,12 @@ def test_set_ct_reporting_hme3_omits_vi_and_keeps_missing_amp_quirk() -> None:
         device_id="aabbccddeeff",
         time_no=82,
         date=_DATE,
-        m=_measurement(ap=-150, dp=-90),
+        m=_measurement(),
     )
     # Reproduce the on-wire quirk: no '&' between slv and udp.
     assert "&slv=2udp=1&mqtt=1" in url
-    # HME-3 sends no instantaneous voltage/current, and signed powers.
+    # HME-3 sends no instantaneous voltage/current.
     assert "va=" not in url and "ia=" not in url
-    assert "&ap=-150&bp=20&cp=30&dp=-90&" in url
     assert url.endswith("&cz=5&ca=1&cb=2&cc=3&cd=4&dz=-5&da=-1&db=-2&dc=-3&dd=-4")
 
 

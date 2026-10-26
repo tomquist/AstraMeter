@@ -11,6 +11,7 @@ from astrameter.cloud_reporting import (
     CloudReporter,
     CloudReporterConfig,
     CtMeasurement,
+    reporting_firmware_version,
 )
 from astrameter.config import addon
 from astrameter.config.config_loader import ClientFilter
@@ -257,7 +258,6 @@ async def _bind_marstek_responder(
     device_id: str,
     powermeters: list[ConfiguredPowermeter],
     marstek_mac: str,
-    marstek_ver_v: int | None,
 ) -> None:
     """Answer Marstek app polls over MQTT, if a managed MAC gives hame-relay
     something to route the replies back to."""
@@ -281,11 +281,10 @@ async def _bind_marstek_responder(
                 device.reporting_consumer_rows()
             ),
             wifi_rssi=device.wifi_rssi,
-            ver_v=(
-                marstek_ver_v
-                if marstek_ver_v is not None
-                else ver_v_from_marstek_api_version(None)
-            ),
+            # A real CT reports its own firmware version as `ver_v`, the same
+            # constant it sends as the handshake's `sv` and over Bluetooth, not
+            # the cloud record's `version` (which our own replies set).
+            ver_v=reporting_firmware_version(device.ct_type),
         )
     )
 
@@ -377,7 +376,6 @@ async def run_device(
     device_id: str = "",
     insights: MqttInsightsService | None = None,
     marstek_mac: str = "",
-    marstek_ver_v: int | None = None,
     registry: StatusRegistry | None = None,
 ) -> None:
     """Run one emulated device until it stops, wiring it to the optional
@@ -414,7 +412,7 @@ async def run_device(
             insights.register_device(device_id, device)
             if insights.marstek_mqtt_enabled:
                 await _bind_marstek_responder(
-                    insights, device, device_id, powermeters, marstek_mac, marstek_ver_v
+                    insights, device, device_id, powermeters, marstek_mac
                 )
         if ct.cloud_reporting:
             # The cloud knows the CT by the MAC registered in the Marstek
@@ -503,7 +501,6 @@ async def async_main(
                     device_id,
                     insights,
                     managed_marstek.get(device_type, ("", None))[0],
-                    managed_marstek.get(device_type, ("", None))[1],
                     registry=registry,
                 )
                 for device_type, device_id in zip(

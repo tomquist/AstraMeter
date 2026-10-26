@@ -69,6 +69,17 @@ target_include_directories(host_write_slot_test PRIVATE
 find_package(Threads REQUIRED)
 target_link_libraries(host_write_slot_test PRIVATE GTest::gtest_main Threads::Threads)
 
+# The cloud reporter's handover to its HTTP worker. Header-only and free of
+# ESPHome deps for the same reason: both sides, with real threads.
+add_executable(host_cloud_http_slot_test
+  host_cloud_http_slot_test.cpp
+)
+target_include_directories(host_cloud_http_slot_test PRIVATE
+  ${REPO_ROOT}
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(host_cloud_http_slot_test PRIVATE GTest::gtest_main Threads::Threads)
+
 # Marstek MQTT responder: pure CSV k=v helpers that mirror
 # src/astrameter/mqtt_insights/marstek_mqtt.py. No ESPHome deps — compiles
 # clean against host-gcc and validates wire-format parity with Python.
@@ -147,3 +158,4 @@ gtest_discover_tests(host_status_json_test)
 gtest_discover_tests(host_controls_test)
 gtest_discover_tests(host_ble_protocol_test)
 gtest_discover_tests(host_write_slot_test)
+gtest_discover_tests(host_cloud_http_slot_test)

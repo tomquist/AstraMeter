@@ -7,8 +7,8 @@ by the cleartext ``id``/``uid`` query params). Only the newest firmware does it
 those images, every cycle of its reporting state machine:
 
 1. runs the **handshake** ``getDateInfoeu.php`` (``uid``/``fcv``/``aid``/``sv``
-   = device id, Wi-Fi module version, model, firmware version) — a device
-   upsert whose response body is the server's wall-clock time
+   = device id, Wi-Fi module version, model, firmware version), whose
+   response body is the server's wall-clock time
    (``_YYYY_MM_DD_HH_MM_SS_``). On success it rolls its day/hour energy
    registers forward against that server time, then
 2. sends ``setCtReporting``, retrying until the cloud answers, with ``timeNo``
@@ -18,11 +18,15 @@ those images, every cycle of its reporting state machine:
 The two URL templates here match what each model sends on the wire (see
 ``docs/marstek-mqtt-http.md``). The field **set is model-dependent**: ``HME-4``
 (a clamp) also sends instantaneous voltage / current (``va/vb/vc``, ``ia/ib/ic``)
-and 32-bit energy, and puts its per-phase powers through an unsigned 16-bit
-cast, so they go out as magnitudes; ``HME-3`` (a smart-meter reader) sends
-signed powers, 64-bit energy and **no** V/I, and has an on-wire quirk — a
-missing ``&`` between ``slv`` and ``udp`` (``…&slv=<n>udp=<n>…``) — which we
-reproduce so the request matches a real device.
+and 32-bit energy; ``HME-3`` (a smart-meter reader) sends 64-bit energy and
+**no** V/I, and has an on-wire quirk — a missing ``&`` between ``slv`` and
+``udp`` (``…&slv=<n>udp=<n>…``) — which we reproduce so the request matches a
+real device.
+
+Two deliberate departures, because the Marstek app's device list shows each
+report as grid = ``ap + bp + cp + dp``: ``dp`` (the total a real CT sends) goes
+out as ``0`` so the list is not doubled, and ``HME-4`` powers keep their sign
+(a real one sends magnitudes) so an export does not show as an import.
 
 This is **opt-in** and best-effort: reporting failures are logged and never
 disturb the UDP control loop. AstraMeter has no energy register, so it
@@ -47,9 +51,8 @@ DEFAULT_HOST = "eu.hamedata.com"
 # Default build stamp sent as ``fcv`` in the handshake (matches DEFAULT_FC4_V):
 # a real CT sends the same Wi-Fi module version it reports as ``fc4_v``.
 DEFAULT_FCV = "202409090159"
-# A real CT sends its own firmware version as ``sv``, which the cloud writes into
-# the device record's ``version``. Only these versions report to the cloud at
-# all, so they are the ones a reporting CT claims.
+# A real CT sends its own firmware version as ``sv``. Only these versions report
+# to the cloud at all, so they are the ones a reporting CT claims.
 REPORTING_FIRMWARE_VERSIONS = {"HME-4": 124, "HME-3": 122}
 # Both images wait 300 s (their seconds tick) after a report the cloud accepted
 # before starting the next handshake.
@@ -168,8 +171,8 @@ class EnergyCounters:
 class CtMeasurement:
     """The live values a CT puts in a ``setCtReporting`` GET.
 
-    Powers are watts, signed (import positive); the URL builder applies the
-    model's wire cast. ``c*`` and ``d*`` are the bucket fields in the CT's
+    Powers are watts, signed (import positive); ``dp`` is the total, which only
+    the energy register uses (the URL builder sends ``0``). ``c*`` and ``d*`` are the bucket fields in the CT's
     ``x``/``A``/``B``/``C``/``ABC`` order (``z``↔``x`` unassigned, ``d``↔``ABC``
     combined): ``c*`` carries the UDP response's ``*_dchrg_power`` and ``d*`` its
     ``*_chrg_power``, which is where both images read them from. ``va/vb/vc``
@@ -214,20 +217,14 @@ def build_get_date_info_url(host: str, *, uid: str, fcv: str, aid: str, sv: int)
 
     Both images fill it from the same values as their MQTT runtime frame:
     ``uid`` the device id, ``fcv`` the Wi-Fi module version (``fc4_v``), ``aid``
-    the model and ``sv`` the firmware version (``ver_v``). The server stores
-    ``aid``→the device record's ``type`` and ``sv``→its ``version``.
+    the model and ``sv`` the firmware version (``ver_v``). The device record's
+    ``version`` does not follow ``sv``; see ``docs/marstek-mqtt-http.md`` §6.3.
     """
     return (
         f"http://{host}/app/neng/getDateInfoeu.php"
         f"?uid={quote(uid, safe='')}&fcv={quote(fcv, safe='')}"
         f"&aid={quote(aid, safe='')}&sv={int(sv)}"
     )
-
-
-def _hme4_power(watts: int) -> int:
-    # HME-4 converts its float power with an unsigned 16-bit cast whose float
-    # conversion ignores the sign, so the cloud gets the magnitude.
-    return abs(int(watts)) & 0xFFFF
 
 
 def build_set_ct_reporting_url(
@@ -242,17 +239,20 @@ def build_set_ct_reporting_url(
     """Build the ``setCtReporting`` GET for *ct_type* (``HME-4`` or ``HME-3``).
 
     Builds the model-specific template field-for-field, including the model
-    differences (``HME-4`` adds ``va/vb/vc``/``ia/ib/ic`` and sends power
-    magnitudes; ``HME-3`` uses 64-bit energy, omits V/I, and keeps the
-    missing-``&`` ``slv``/``udp`` quirk).
+    differences (``HME-4`` adds ``va/vb/vc``/``ia/ib/ic``; ``HME-3`` uses 64-bit
+    energy, omits V/I, and keeps the missing-``&`` ``slv``/``udp`` quirk).
+
+    ``dp`` always goes out as ``0`` and powers keep their sign: the device list
+    shows grid = ``ap + bp + cp + dp``, so the total a real CT puts in ``dp``
+    would double it, and a real ``HME-4``'s magnitudes would show an export as
+    an import.
     """
     base = f"http://{host}/prod/api/v1/setCtReporting"
     did = quote(device_id, safe="")
     hme3 = ct_type == "HME-3"
-    power = int if hme3 else _hme4_power
     head = (
         f"?id={did}&eled={int(m.eled)}&elet={int(m.elet)}"
-        f"&ap={power(m.ap)}&bp={power(m.bp)}&cp={power(m.cp)}&dp={power(m.dp)}"
+        f"&ap={int(m.ap)}&bp={int(m.bp)}&cp={int(m.cp)}&dp=0"
         f"&rssi={int(m.rssi)}"
     )
     # Quirk: HME-3 omits the '&' between slv and udp; HME-4 includes it.

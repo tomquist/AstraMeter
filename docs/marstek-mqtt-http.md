@@ -199,8 +199,8 @@ blocking HTTP GET, and the state survives a Wi‑Fi drop:
    so **300 s**, then back to step 1.
 
 So a real CT sends one handshake and one report about every five minutes, plus
-whatever the requests themselves take. The response body of `setCtReporting` is
-read but not used.
+whatever the requests themselves take. The CT reads the response body of
+`setCtReporting` but does not use it.
 
 ### 6.2 Status report — `setCtReporting`
 
@@ -256,6 +256,22 @@ runtime frame keep the sign. The `HME-3` takes its powers as signed integers
 from the meter (import − export when the meter reports both), so they stay
 signed.
 
+**What the cloud does with a report.** Measured against the live cloud on a
+registered `HME-4` record:
+
+- The server answers every report with HTTP 200 and the JSON body
+  `{"code":1,"msg":"success"}` — including an out‑of‑range `timeNo`, an
+  epoch‑seconds `timeNo` and an id no account has. A request with no parameters
+  gets `{}`. So the answer says nothing about whether the report was used.
+- Within seconds, the device list (`ems/api/v1/getDeviceList`, the Marstek app's
+  device overview) marks the device online (`status` 1) and sets its `grid` and
+  `load` to **`ap + bp + cp + dp`**, sign kept. The bucket fields, `timeNo` and
+  `date` do not show there, and `report_time` does not change. After about an
+  hour without reports the device goes offline again.
+
+Because `dp` is the total, a report shaped like a real CT's shows **twice** the
+grid power in the device list, and an `HME-4` export shows as an import.
+
 > **`HME-3` quirk:** the on‑wire URL is **missing an `&`** between
 > `slv=%d` and `udp=%d` (`…&slv=%dudp=%d…`), so the slave count and udp flag run
 > together as one token. The `HME-4` template has the `&`. Replicas mimicking
@@ -276,16 +292,22 @@ Both images fill it from the same variables as the MQTT runtime frame:
 | `aid` | model, `HME-4` / `HME-3` | — |
 | `sv` | the CT firmware version, a constant: `124` (`HME-4`), `122` (`HME-3`) | `ver_v` |
 
-The response body is the server's wall‑clock time, which the CT scans with
-`_%hu_%hhu_%hhu_%hhu_%hhu_%hhu_` (year, month, day, hour, minute, second). The
-call is also a **device upsert**: empirically the server writes `aid`→the device
-record's **`type`** and `sv`→its **`version`**. (`hamedata.com` is also the OTA
+The response is HTTP 200, `text/html`, and its body is the server's wall‑clock
+time, which the CT scans with `_%hu_%hhu_%hhu_%hhu_%hhu_%hhu_` (year, month,
+day, hour, minute, second). A live answer looks like
+`_2026_10_26_09_15_48_04_0_0_0`: that request was sent at 08:15:47 UTC, so the
+time is UTC+1, which was Europe/Berlin then and also the time zone of that
+device record. The four trailing fields stayed the same across calls; what they
+mean is not known, and the CT ignores them. (`hamedata.com` is also the OTA
 download host.)
 
-> ⚠️ Because this endpoint **overwrites `type`/`version`**, wrong values corrupt
-> the device record — a non‑model `type`, for example, makes the Marstek app fall
-> back to a generic, default‑locale device card. AstraMeter therefore sends the
-> CT model as `aid` and, as `sv`, the version a reporting CT of that model runs.
+The handshake does **not** set the device record's `version`. A registered
+`HME-4` record whose `version` was `148` kept it after handshakes sending
+`sv=124`. That `148` was what AstraMeter's MQTT responder then sent as
+`ver_v`; it now sends the firmware version, as a real CT does. Earlier notes said the call also writes `aid` into the record's
+`type`, so that a non‑model `aid` turns the Marstek app's device card into a
+generic one. That part has not been re‑checked, so AstraMeter still sends the
+CT model as `aid`, and as `sv` the version a reporting CT of that model runs.
 
 ### 6.4 Energy registers — `eled` / `elet`
 
@@ -317,8 +339,9 @@ crypto:
 - **The report `id` (MAC)** must be a device the cloud already knows. The binding
   to an account comes from having registered/paired that device; `setCtReporting`
   itself carries no account id.
-- Still unknown: what the server answers to `setCtReporting`, and which time
-  zone the handshake's server time is in (the CT just uses it).
+- Still unknown: whether the handshake's time follows the server or the device
+  record's time zone (both were Europe/Berlin when measured), what the trailing
+  handshake fields mean, and what besides the device list reads a report.
 
 ## 7. CT002 vs CT003 summary
 
@@ -346,8 +369,10 @@ stacks. In Python, set `CLOUD_REPORTING = true` in the `[CT002]`/`[CT003]`
 section; on ESPHome, add a `cloud_reporting:` sub‑block under `ct002:` (it needs
 an `http_request:` block). Either way AstraMeter runs the cycle of §6.1 —
 handshake, report, a 300 s wait (the interval option) — retrying a failed step
-after 60 s, and picks the `HME-4`/`HME-3` field layout and power sign from the
-emulated `ct_type`. `timeNo` and `date` come from the handshake's server time
+after 60 s, and picks the `HME-4`/`HME-3` field layout from the emulated
+`ct_type`. It departs from a real CT in two places so the app's device list
+shows the true grid power (§6.2): `dp` always goes out as `0`, and the phase
+powers keep their sign on `HME-4` too. `timeNo` and `date` come from the handshake's server time
 (the local clock only when the body carries none). It fills the fields
 AstraMeter knows (per‑phase power, the bucket fields, RSSI, slave count, link
 flags) and zero‑fills V/I on `HME-4`, except that the ESPHome build sends the
@@ -359,6 +384,7 @@ ESPHome `marstek_registration:` block), it uses the MAC of the device AstraMeter
 registers there — the id the cloud already knows; otherwise it uses the
 configured `CT_MAC` / `ct_mac`. An ESP32 the app added over Bluetooth, with no
 `ct_mac`, reports as that CT. The model and firmware version the handshake
-re‑asserts (§6.3) are derived automatically, so there is no account‑id knob to
-set. The web config generator produces all three forms
+sends (§6.3) are derived automatically, so there is no account‑id knob to set.
+On an ESP32 the requests run on a background task, so a slow cloud never holds
+up the replies to the batteries. The web config generator produces all three forms
 (config.ini, the add‑on options, the ESPHome sub‑block). See `config.ini.example`.

@@ -1,7 +1,6 @@
 #include "cloud_reporting_url.h"
 
 #include <cstdio>
-#include <cstdlib>
 #include <string>
 
 namespace esphome {
@@ -42,10 +41,6 @@ void append_date(std::string *s, int year, int month, int day) {
   std::snprintf(buf, sizeof(buf), "%d-%02d-%02d", year, month, day);
   s->append(buf);
 }
-
-// HME-4 converts its float power with an unsigned 16-bit cast whose float
-// conversion ignores the sign, so the cloud gets the magnitude.
-int hme4_power(int watts) { return std::abs(watts) & 0xFFFF; }
 
 bool is_leap(int year) { return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0; }
 
@@ -149,13 +144,14 @@ std::string build_set_ct_reporting_url(const std::string &host, const std::strin
   url += "&elet=";
   append_int(&url, static_cast<long long>(m.elet));
   url += "&ap=";
-  append_int(&url, hme3 ? m.ap : hme4_power(m.ap));
+  append_int(&url, m.ap);
   url += "&bp=";
-  append_int(&url, hme3 ? m.bp : hme4_power(m.bp));
+  append_int(&url, m.bp);
   url += "&cp=";
-  append_int(&url, hme3 ? m.cp : hme4_power(m.cp));
-  url += "&dp=";
-  append_int(&url, hme3 ? m.dp : hme4_power(m.dp));
+  append_int(&url, m.cp);
+  // The device list shows grid = ap + bp + cp + dp, so the total a real CT
+  // sends here would double it. Mirrors build_set_ct_reporting_url.
+  url += "&dp=0";
   url += "&rssi=";
   append_int(&url, m.rssi);
   // Firmware quirk: HME-3 omits the '&' between slv and udp; HME-4 includes it.
