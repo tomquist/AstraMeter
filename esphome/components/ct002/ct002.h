@@ -109,7 +109,8 @@ struct Consumer {
   // "Distribution Weight" entity; mirrors Python's Consumer.distribution_weight.
   float distribution_weight{1.0f};
   // Efficiency-rotation window weight ([0, 1], 1.0 = neutral / full
-  // participation, 0.0 = skipped while limiting). Tuned live via the MQTT
+  // participation, 0.0 = a backup: never leads, covers what the batteries
+  // ahead cannot). Tuned live via the MQTT
   // "Efficiency Window Weight" entity; mirrors Python's
   // Consumer.efficiency_window_weight.
   float efficiency_window_weight{1.0f};

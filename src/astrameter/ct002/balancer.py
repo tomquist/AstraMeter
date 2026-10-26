@@ -69,8 +69,10 @@ class ConsumerReport:
     efficiency_window_weight: float = 1.0
     """Fraction of ``efficiency_rotation_interval`` the rotating slot is held
     for, clamped to [0, 1]; applied only while a single battery is active (see
-    :meth:`LoadBalancer._rotate_priority_head`). ``0.0`` parks the battery, by
-    way of :meth:`LoadBalancer._sync_pool` sinking it to the tail."""
+    :meth:`LoadBalancer._rotate_priority_head`). ``0.0`` makes it a backup:
+    :meth:`LoadBalancer._sync_pool` sinks it to the tail, so it never leads,
+    and the standby reserve (:meth:`LoadBalancer._update_spill`) has it cover
+    only what the batteries ahead cannot."""
 
     min_dc_output: float | None = None
     """Per-device MIN_DC_OUTPUT override in watts; ``None`` uses the global rule."""
@@ -243,6 +245,42 @@ CONTROL_QUALITY_LIMITED_SHARE = 0.5
 CONTROL_QUALITY_SATURATED = 0.6
 
 EFFICIENCY_HYSTERESIS_FACTOR = 1.2
+# Standby reserve (efficiency mode only).  A battery outside the active set
+# ("standby": faded fully out, which includes a 0 % efficiency window weight
+# sunk to the tail) stays at 0 W until every battery ahead of it is out of
+# headroom in the demand's direction: at its learned ceiling, saturated
+# (full / empty), or DC-only under a surplus.  Then the standby batteries take
+# only the overflow, one at a time in rotation order, and give it back first
+# when the demand falls (see ``LoadBalancer._update_spill``).
+#
+# A spilling standby joins the share math with its weight scaled by
+# SPILL_WEIGHT per rank, so the water-fill keeps the batteries ahead of it at
+# their ceilings (which keeps those ceilings confirmed) and hands it the
+# overflow alone.
+SPILL_WEIGHT = 0.01
+# Below this demand there is no direction to spill in.
+SPILL_MIN_DEMAND_W = 30.0
+# A standby still carrying more than SPILL_HOLD_W in the spill direction once
+# the batteries ahead have headroom again is released only after
+# SPILL_RELEASE_SECONDS: a head dipping off its ceiling for a poll or two must
+# not drop the overflow back on the grid.  The balance term moves its load back
+# to the head in the meantime.
+SPILL_HOLD_W = 15.0
+SPILL_RELEASE_SECONDS = 10.0
+# An error this small against the spill direction is left to the regular share
+# instead of being unloaded from the standby first: it keeps meter noise from
+# walking the standby across 0 W and back.
+SPILL_UNLOAD_DEADBAND_W = 30.0
+# A standby joining from 0 W is not judged for saturation for this long (or
+# until it produces something): a DC-only battery needs a few polls before it
+# can start at all, and scoring it during them would cap it where it stands.
+# Short against the promotion grace, so an empty standby is still passed over
+# within seconds.
+SPILL_JOIN_GRACE_SECONDS = 20.0
+# Cap standing in for "nothing more" on a battery ahead that cannot move in
+# the spill direction at all (charge-blind, or saturated at 0 W): above zero,
+# since a zero cap reads as "no cap" in the water-fill.
+SPILL_MIN_CAP_W = 1e-3
 # Seconds to suppress saturation checks after a battery is promoted from
 # deprioritized to active (inverter ramp-up); cleared early once the battery
 # produces meaningful output.
@@ -1096,6 +1134,19 @@ class LoadBalancer:
         self._reset_fn = reset_fn
         self._consumers: dict[str, BalancerConsumerState] = {}
         self._deprioritized: set[str] = set()
+        # Standby reserve (see SPILL_WEIGHT): the standby batteries carrying
+        # the overflow of the batteries ahead of them, in rotation order; the
+        # direction they carry it in; the caps standing in for a ceiling on
+        # the batteries ahead that are out of headroom for another reason
+        # (saturated, charge-blind); each spiller's share-weight scale; and
+        # when a held spiller's batteries ahead first showed headroom again.
+        # Re-decided on every call, so a repeated meter reading still sees a
+        # head that runs empty.
+        self._spilling: list[str] = []
+        self._spill_dir: int = 0
+        self._spill_caps: dict[str, float] = {}
+        self._spill_scale: dict[str, float] = {}
+        self._spill_free_since: float | None = None
         self._priority: list[str] = []
         self._last_rotation: float = self._clock()
         self._cache_sample: tuple | None = None
@@ -1386,7 +1437,14 @@ class LoadBalancer:
         if consumer_id != candidate_id and consumer_id not in support_reports:
             return None
 
-        desired_total = sum(report.power for report in reports.values()) + grid_total
+        # What the standby reserve delivers is not the probe's to split: the
+        # spilling batteries hold it (or give it back first), so counting it
+        # here would have the candidate and its supports take it over too.
+        desired_total = (
+            sum(report.power for report in reports.values())
+            + grid_total
+            - self._spill_delivery(reports, grid_total)
+        )
         probe_actual = _report_of(reports, candidate_id).power
         probe_ceiling = max(abs(desired_total), self._cfg.probe_min_power)
 
@@ -1464,6 +1522,9 @@ class LoadBalancer:
         state = self._consumers.get(consumer_id)
         if consumer_id in self._probe_participants():
             rotation = "probing"
+        elif consumer_id in self._spilling:
+            # Deprioritized, but carrying the standby reserve's overflow.
+            rotation = "overflow"
         elif consumer_id in self._deprioritized:
             rotation = "deprioritized"
         else:
@@ -1509,13 +1570,17 @@ class LoadBalancer:
         its fade path still carries a transient non-zero command that would
         score as "cannot follow" and lock ``_maybe_force_swap_saturated`` out of
         promoting it back.  Its score stays at the zero the symmetric clear in
-        ``_compute_efficiency_deprioritized`` set.
+        ``_compute_efficiency_deprioritized`` set.  A deprioritized battery
+        carrying the standby reserve's overflow is judged like an active one:
+        an empty spiller has to be passed over (see :meth:`_update_spill`).
         """
         if (
             consumer_id not in reports
             or consumer_mode.mode == "manual"
             or consumer_id in self._probe_participants()
-            or consumer_id in self._deprioritized
+            or (
+                consumer_id in self._deprioritized and consumer_id not in self._spilling
+            )
         ):
             return
         report = _report_of(reports, consumer_id)
@@ -1555,7 +1620,9 @@ class LoadBalancer:
             consumer_id not in reports
             or consumer_mode.mode == "manual"
             or consumer_id in self._probe_participants()
-            or consumer_id in self._deprioritized
+            or (
+                consumer_id in self._deprioritized and consumer_id not in self._spilling
+            )
         ):
             return
         now = self._clock()
@@ -1629,14 +1696,239 @@ class LoadBalancer:
             )
 
     def _ceilings(self, ids: Collection[str], sign: int) -> dict[str, float]:
-        """Learned ceilings of *ids* in direction *sign*, where one is known."""
+        """Learned ceilings of *ids* in direction *sign*, where one is known.
+
+        While the standby reserve spills in *sign*'s direction, a battery
+        ahead of it that is out of headroom for another reason (saturated,
+        charge-blind) is capped where it stands, so the water-fill hands the
+        rest to the standby (see :meth:`_update_spill`).
+        """
         out: dict[str, float] = {}
+        spill_caps = self._spill_caps if sign != 0 and sign == self._spill_dir else {}
         for cid in ids:
             state = self._consumers.get(cid)
             ceiling = state.ceiling(sign) if state is not None else 0.0
             if ceiling > 0.0:
                 out[cid] = ceiling
+            cap = spill_caps.get(cid)
+            if cap is not None:
+                out[cid] = min(out.get(cid, cap), cap)
         return out
+
+    def _share_weight(self, reports: Reports, consumer_id: str | None) -> float:
+        """*consumer_id*'s Distribution Weight as the share math sees it.
+
+        The configured weight, scaled down for a spilling standby battery (see
+        SPILL_WEIGHT) so the batteries ahead of it keep their full slice.
+        """
+        weight = _report_of(reports, consumer_id).weight
+        scale = self._spill_scale.get(consumer_id) if consumer_id else None
+        return weight if scale is None else weight * scale
+
+    def _no_headroom(
+        self,
+        consumer_id: str,
+        reports: Reports,
+        sign: int,
+        charge_blind: Collection[str],
+        margin: float,
+    ) -> float | None:
+        """The cap *consumer_id* is stuck at in direction *sign*, or ``None``.
+
+        Out of headroom means one of: parked (Distribution Weight 0); unable
+        to charge from AC under a surplus; saturated (it stopped following
+        its commands: full or empty); or within *margin* of its learned
+        ceiling.  The cap is a magnitude in *sign*'s direction.
+        """
+        report = _report_of(reports, consumer_id)
+        if report.weight <= 0.0:
+            return 0.0
+        if sign < 0 and (
+            consumer_id in charge_blind or not _is_ac_chargeable(report.device_type)
+        ):
+            return SPILL_MIN_CAP_W
+        state = self._consumers.get(consumer_id)
+        threshold = self._cfg.efficiency_saturation_threshold
+        if state is not None and threshold > 0 and state.saturation_score >= threshold:
+            return max(abs(report.power), SPILL_MIN_CAP_W)
+        ceiling = state.ceiling(sign) if state is not None else 0.0
+        if ceiling > 0.0 and report.power * sign >= ceiling - margin:
+            return ceiling
+        return None
+
+    def _clear_spill(self) -> None:
+        self._spilling = []
+        self._spill_dir = 0
+        self._spill_caps = {}
+        self._spill_scale = {}
+        self._spill_free_since = None
+
+    def _update_spill(
+        self,
+        reports: Reports,
+        control_grid: float,
+        faded: Mapping[str, float],
+        charge_blind: Collection[str],
+    ) -> list[str]:
+        """Decide which standby batteries carry the overflow, and return them.
+
+        A merit order with a spinning reserve: in rotation order, a standby
+        battery (efficiency mode, faded fully out, Distribution Weight above
+        0) joins only while every battery ahead of it, earlier spillers
+        included, is out of headroom in the demand's direction (see
+        :meth:`_no_headroom`), and while the grid still shows demand left over
+        for it.  DC-only standbys are passed over under a surplus.  Joining
+        takes the ceiling margin, staying takes twice that, so a head hovering
+        at its ceiling does not toggle the standby; and a spiller that still
+        carries power is held for SPILL_RELEASE_SECONDS after the batteries
+        ahead regain headroom.
+
+        Re-decided on every call rather than once per meter sample: the
+        inputs that matter (reported powers, saturation, ceilings) change
+        between polls of the same reading, and a meter repeating its value
+        must not freeze the decision (an emptied head would never hand over).
+        Deciding again on the same inputs gives the same set.
+        """
+        cfg = self._cfg
+        if cfg.min_efficient_power <= 0 or len(reports) < 2:
+            if self._spilling or self._spill_free_since is not None:
+                self._clear_spill()
+            return []
+        prev, prev_dir = self._spilling, self._spill_dir
+        standby = [
+            cid
+            for cid in self._priority
+            if cid in reports and faded.get(cid) == 0.0 and reports[cid].weight > 0.0
+        ]
+        sign = 0
+        if standby:
+            demand = sum(r.power for r in reports.values()) + control_grid
+            if abs(demand) >= SPILL_MIN_DEMAND_W:
+                sign = _sign(demand)
+        spill: list[str] = []
+        caps: dict[str, float] = {}
+        held = False
+        if sign != 0:
+            now = self._clock()
+            ahead = [
+                cid for cid in reports if cid not in standby and faded.get(cid, 1.0) > 0
+            ]
+            for cid in standby:
+                if sign < 0 and (
+                    cid in charge_blind
+                    or not _is_ac_chargeable(reports[cid].device_type)
+                ):
+                    # Cannot take a surplus: the next standby in line can.
+                    continue
+                staying = cid in prev and prev_dir == sign
+                margin = 2 * CEILING_AT_MARGIN_W if staying else CEILING_AT_MARGIN_W
+                blocked = True
+                for other in ahead:
+                    cap = self._no_headroom(other, reports, sign, charge_blind, margin)
+                    if cap is None:
+                        blocked = False
+                    else:
+                        caps[other] = cap
+                if staying and not blocked:
+                    if reports[cid].power * sign > SPILL_HOLD_W:
+                        held = True
+                        if self._spill_free_since is None:
+                            self._spill_free_since = now
+                        blocked = now - self._spill_free_since < SPILL_RELEASE_SECONDS
+                elif not staying and control_grid * sign <= 0:
+                    # Nothing left over for it to take.
+                    blocked = False
+                if not blocked:
+                    break
+                spill.append(cid)
+                ahead.append(cid)
+        if not held:
+            self._spill_free_since = None
+        for cid in prev:
+            if cid not in spill:
+                self._forget_saturation(cid)
+        for cid in spill:
+            if cid not in prev:
+                self._set_consumer_grace(cid, self._clock() + SPILL_JOIN_GRACE_SECONDS)
+                logger.info(
+                    "Efficiency: %s takes the overflow of the batteries ahead",
+                    cid[:16],
+                )
+        self._spilling = spill
+        self._spill_dir = sign if spill else 0
+        self._spill_caps = caps if spill else {}
+        self._spill_scale = {
+            cid: SPILL_WEIGHT ** (i + 1) for i, cid in enumerate(spill)
+        }
+        return spill
+
+    def _spill_takes(self, reports: Reports, error: float) -> dict[str, float]:
+        """Each spiller's part of an *error* against the spill direction.
+
+        Last in, first out: the latest standby to join gives back first, each
+        down to 0 W and never past it.  Empty unless *error* opposes the spill
+        direction.
+        """
+        d = self._spill_dir
+        out: dict[str, float] = {}
+        if d == 0 or error * d >= 0:
+            return out
+        remaining = error
+        for cid in reversed(self._spilling):
+            carried = max(0.0, _report_of(reports, cid).power * d)
+            take = max(remaining * d, -carried) * d
+            out[cid] = take
+            remaining -= take
+        return out
+
+    def _spill_delivery(self, reports: Reports, grid_total: float) -> float:
+        """What the spilling batteries deliver after this poll during a probe.
+
+        They hold their output, giving back first (LIFO) an error against
+        the spill direction past SPILL_UNLOAD_DEADBAND_W.
+        """
+        if not self._spilling:
+            return 0.0
+        total = float(sum(_report_of(reports, cid).power for cid in self._spilling))
+        if grid_total * self._spill_dir < -SPILL_UNLOAD_DEADBAND_W:
+            total += sum(self._spill_takes(reports, grid_total).values())
+        return total
+
+    def _spill_target(
+        self,
+        consumer_id: str,
+        reports: Reports,
+        error: float,
+        *,
+        hold: bool,
+    ) -> list[float]:
+        """Steer a spiller while a probe or a fade owns the rest of the pool.
+
+        During a probe (*hold*) it keeps its output and only gives back an
+        error against the spill direction past the deadband, matching what
+        :meth:`_spill_delivery` told the probe.  During a fade the faders get
+        demand-split targets, not integrators, so the spiller is the one that
+        integrates: the last one takes an error in its direction, all of them
+        give back last in, first out.  Never past 0 W.
+        """
+        d = self._spill_dir
+        reported = _report_of(reports, consumer_id).power
+        take = 0.0
+        if error * d < 0:
+            if not hold or error * d < -SPILL_UNLOAD_DEADBAND_W:
+                take = self._spill_takes(reports, error).get(consumer_id, 0.0)
+        elif not hold and consumer_id == self._spilling[-1]:
+            take = error
+        desired = reported + take
+        if desired * d < 0:
+            desired = 0.0
+        return self._emit(
+            consumer_id,
+            NetOutputW(desired),
+            reported,
+            reports,
+            pace=desired != reported,
+        )
 
     def _pinned(self, reports: Reports, ids: Collection[str], sign: int) -> set[str]:
         """Consumers of *ids* already at their ceiling in direction *sign*."""
@@ -1724,6 +2016,7 @@ class LoadBalancer:
         """Full cleanup for a departing consumer."""
         self._consumers.pop(consumer_id, None)
         self._deprioritized.discard(consumer_id)
+        self._drop_spiller(consumer_id)
         if consumer_id in self._priority:
             self._priority.remove(consumer_id)
             self._invalidate_efficiency_cache()
@@ -1735,9 +2028,26 @@ class LoadBalancer:
         self._deprioritized.discard(consumer_id)
         self._priority = [cid for cid in self._priority if cid != consumer_id]
         self._consumers.pop(consumer_id, None)
+        self._drop_spiller(consumer_id)
         self._invalidate_efficiency_cache()
         if consumer_id in self._probe_participants():
             self._clear_probe_state(f"consumer detached: {consumer_id[:16]}")
+
+    def _drop_spiller(self, consumer_id: str) -> None:
+        """Take a departing consumer out of the standby reserve.
+
+        The spillers behind it keep their rank order, so their weight scales
+        are re-derived; the caps it held as a battery ahead go too.
+        """
+        self._spill_caps.pop(consumer_id, None)
+        if consumer_id not in self._spilling:
+            return
+        self._spilling = [cid for cid in self._spilling if cid != consumer_id]
+        self._spill_scale = {
+            cid: SPILL_WEIGHT ** (i + 1) for i, cid in enumerate(self._spilling)
+        }
+        if not self._spilling:
+            self._clear_spill()
 
     def reset_consumer(self, consumer_id: str) -> None:
         """Clear stale state and set a grace period.
@@ -1780,6 +2090,7 @@ class LoadBalancer:
         self._priority.append(self._priority.pop(0))
         self._last_rotation = self._clock()
         self._probe_state = None
+        self._clear_spill()
         self._invalidate_efficiency_cache()
         self._prune_pool(current_pool)
         for state in self._consumers.values():
@@ -2167,6 +2478,19 @@ class LoadBalancer:
         )
         any_fading = any(0.0 < w < 1.0 for w in faded_adjustments.values())
 
+        # The standby reserve is decided before the probe and fade returns
+        # below, so a handoff in flight neither misses an emptied head nor
+        # steers a spilling battery to 0 W.
+        spill = self._update_spill(
+            reports, control_grid, faded_adjustments, charge_blind
+        )
+        for cid in spill:
+            eff_part[cid] = 1.0
+        if spill and self._spill_dir > 0:
+            # Carrying a discharge overflow, a dip below zero asks it to
+            # discharge less, which a DC-only battery can do too.
+            charge_blind = charge_blind - set(spill)
+
         probe_target = self._compute_probe_target(
             consumer_id, reports, grid_total, eff_part
         )
@@ -2181,13 +2505,25 @@ class LoadBalancer:
         if consumer_id and consumer_id in charge_blind:
             return self._steer_to_zero(consumer_id, reports, paced=True)
 
+        if consumer_id and consumer_id in spill:
+            if self._probe_state is not None:
+                return self._spill_target(consumer_id, reports, grid_total, hold=True)
+            if any_fading:
+                return self._spill_target(
+                    consumer_id, reports, control_grid, hold=False
+                )
+
         if any_fading and consumer_id:
             return self._fading_target(consumer_id, reports, grid_total, eff_part)
 
         for cid, fade_w in faded_adjustments.items():
-            if cid in eff_part and fade_w == 0.0:
+            if cid in eff_part and fade_w == 0.0 and cid not in spill:
                 eff_part[cid] = 0.0
-        if consumer_id and faded_adjustments.get(consumer_id) == 0.0:
+        if (
+            consumer_id
+            and faded_adjustments.get(consumer_id) == 0.0
+            and consumer_id not in spill
+        ):
             return self._steer_to_zero(consumer_id, reports, paced=True)
 
         residual = self._residual_share(
@@ -2198,6 +2534,10 @@ class LoadBalancer:
             residual = self._damp_oscillation(consumer_id, residual)
 
         reported = _report_of(reports, consumer_id).power if consumer_id else 0
+        if consumer_id in spill and (reported + residual) * self._spill_dir < 0:
+            # A spiller winds down to 0 W, never across into the other
+            # direction.
+            residual = -reported
         return self._emit(
             consumer_id,
             NetOutputW(reported + residual),
@@ -2223,7 +2563,17 @@ class LoadBalancer:
         zero-sum, so it is grid-neutral.  Only the tracking term is clamped
         against the predicted grid direction — zeroing the balancing term too
         would make equalization one-sided near steady state (issue #523).
+
+        While the standby reserve spills, an error against its direction past
+        SPILL_UNLOAD_DEADBAND_W is given back by the spillers first (see
+        :meth:`_unload_lifo`).
         """
+        if (
+            self._spilling
+            and consumer_id is not None
+            and control_grid * self._spill_dir < -SPILL_UNLOAD_DEADBAND_W
+        ):
+            return self._unload_lifo(consumer_id, reports, control_grid, eff_part)
         # Batteries already at their ceiling in the direction the grid asks
         # for cannot take a slice of it (issue #655).
         pinned = self._pinned(reports, eff_part, _sign(control_grid))
@@ -2257,6 +2607,30 @@ class LoadBalancer:
         if push:
             out = push * max(out * push, CEILING_RETEST_PUSH_W)
         return out
+
+    def _unload_lifo(
+        self,
+        consumer_id: str,
+        reports: Reports,
+        control_grid: float,
+        eff_part: dict[str, float],
+    ) -> float:
+        """Last in, first out: the pool asks for less while standbys spill.
+
+        The spillers give back what they carry first, latest first, each down
+        to 0 W and never past it; only what is left reaches the batteries
+        ahead.  Tracking only: no balance term, so the unload never waits on a
+        correction too small for the firmware to act on.
+        """
+        takes = self._spill_takes(reports, control_grid)
+        if consumer_id in takes:
+            share = takes[consumer_id]
+        else:
+            remaining = control_grid - sum(takes.values())
+            ahead = {c: w for c, w in eff_part.items() if c not in takes}
+            share = self._fair_share(consumer_id, reports, remaining, ahead)
+        self._diag_fair_share = share
+        return share
 
     def _ceiling_retest(
         self,
@@ -2298,7 +2672,7 @@ class LoadBalancer:
         del others[consumer_id]
         share = capped_weighted_share(
             total,
-            {cid: _report_of(reports, cid).weight for cid in ids},
+            {cid: self._share_weight(reports, cid) for cid in ids},
             ids,
             others,
             consumer_id,
@@ -2384,8 +2758,8 @@ class LoadBalancer:
             consumer_id, NetOutputW(desired), reported, reports, eff_part, pace=True
         )
 
-    @staticmethod
     def _fair_share(
+        self,
         consumer_id: str | None,
         reports: Reports,
         control_grid: float,
@@ -2406,7 +2780,7 @@ class LoadBalancer:
         confirms its ceiling, and what exposes one that has since been raised.
         """
         share_part = {
-            cid: eff_part[cid] * _report_of(reports, cid).weight for cid in eff_part
+            cid: eff_part[cid] * self._share_weight(reports, cid) for cid in eff_part
         }
         total_effective = sum(share_part.values())
         if consumer_id and consumer_id in reports and total_effective > 0:
@@ -2723,7 +3097,7 @@ class LoadBalancer:
             # never let concentration suppress it.
             return False
         actual_total = sum(_report_of(reports, cid).power for cid in conc_ids)
-        weights = {cid: _report_of(reports, cid).weight for cid in conc_ids}
+        weights = {cid: self._share_weight(reports, cid) for cid in conc_ids}
         ceilings = self._ceilings(conc_ids, _sign(actual_total))
         for cid in conc_ids:
             actual_self = _report_of(reports, cid).power
@@ -2756,7 +3130,7 @@ class LoadBalancer:
         # healthy battery from the pool.  A battery's share stops at its
         # learned ceiling and the rest goes to the others, so an unlimited
         # battery is not pulled down toward limited ones (issue #655).
-        weights = {cid: _report_of(reports, cid).weight for cid in participating}
+        weights = {cid: self._share_weight(reports, cid) for cid in participating}
         target_share = capped_weighted_share(
             actual_total,
             weights,
@@ -2916,7 +3290,9 @@ class LoadBalancer:
         for cid in self._deprioritized - set(self._priority[slots:]):
             self._promote_to_active(cid, grace)
 
-        if not probing and self._maybe_force_swap_saturated(self._priority, slots, now):
+        if not probing and self._maybe_force_swap_saturated(
+            self._priority, slots, now, reports, grid_total
+        ):
             # The swap reordered ``_priority``, so the active set and the cache
             # key it feeds have to be taken again.
             cache_key = (sample_id, tuple(self._priority))
@@ -3056,7 +3432,12 @@ class LoadBalancer:
             self._saturation.clear(state)
 
     def _maybe_force_swap_saturated(
-        self, priority: list[str], slots: int, now: float
+        self,
+        priority: list[str],
+        slots: int,
+        now: float,
+        reports: Reports,
+        grid_total: float,
     ) -> bool:
         """Swap a saturated active battery with a healthy deprioritized one.
 
@@ -3065,6 +3446,14 @@ class LoadBalancer:
         :meth:`_compute_efficiency_deprioritized` clearing the score on the
         active -> deprioritized transition, so a healthy candidate exists the
         first time a newly saturated active unit needs swapping out post-probe.
+
+        A battery with a 0 efficiency window weight never leads, so it is not
+        a candidate while the saturated one could: :meth:`_sync_pool` would
+        sink it straight back, returning the saturated battery to the head
+        under a fresh grace that hides it from the standby reserve.  The
+        reserve covers it instead (see :meth:`_update_spill`).  Nor, under a
+        surplus, is a battery that cannot charge from AC: it would only hold
+        the slot through a probe it cannot pass.
         """
         cfg = self._cfg
         if cfg.efficiency_saturation_threshold <= 0 or slots >= len(priority):
@@ -3078,8 +3467,17 @@ class LoadBalancer:
                 break
         if saturated_idx is None:
             return False
+        saturated_leads = (
+            _report_of(reports, priority[saturated_idx]).efficiency_window_weight > 0.0
+        )
+        surplus = sum(r.power for r in reports.values()) + grid_total < 0
         healthy_idx = None
         for i in range(slots, len(priority)):
+            candidate = _report_of(reports, priority[i])
+            if (saturated_leads and candidate.efficiency_window_weight <= 0.0) or (
+                surplus and not _is_ac_chargeable(candidate.device_type)
+            ):
+                continue
             state = self._consumers.get(priority[i])
             if not state or state.saturation_score < threshold:
                 healthy_idx = i
