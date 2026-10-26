@@ -1014,3 +1014,63 @@ def test_bluetooth_keeps_phase_directions_unless_allowed(esp32_core: Any) -> Non
     ):
         config = ct002_component.BLUETOOTH_SCHEMA(raw)
         assert config[ct002_component.CONF_ALLOW_DIRECTION_CHANGE] is expected, raw
+
+
+def _generated_defines(tmp_path: Path, ct002_extra: str) -> str:
+    """Generate (not compile) a minimal ESP32 config, return its defines.h."""
+    if shutil.which("esphome") is None:
+        pytest.skip("ESPHome CLI not installed; cannot generate the firmware")
+    config = tmp_path / "device.yaml"
+    config.write_text(
+        f"""
+esphome:
+  name: ct002-defines
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+wifi:
+  ssid: "test-ssid"
+  password: "test-password"
+external_components:
+  - source:
+      type: local
+      path: {COMPONENTS_PATH}
+    components: [ct002]
+mqtt:
+  broker: 192.168.1.10
+  discovery: false
+sensor:
+  - platform: template
+    id: grid_l1
+    lambda: 'return 0.0f;'
+ct002:
+  power_sensor_l1: grid_l1
+  dashboard: false
+  bluetooth: false
+{ct002_extra}
+""",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["esphome", "compile", "--only-generate", str(config)],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    return (
+        tmp_path / ".esphome/build/ct002-defines/src/esphome/core/defines.h"
+    ).read_text(encoding="utf-8")
+
+
+def test_mqtt_insights_queues_its_publishes(tmp_path: Path) -> None:
+    # A synchronous publish into a connection the broker has reset blocks the
+    # ct002 loop for esp-mqtt's 10 s network timeout, long enough for the task
+    # watchdog to reset the board. The queue is what `idf_send_async` turns on.
+    assert "USE_MQTT_IDF_ENQUEUE" in _generated_defines(tmp_path, "  mqtt_insights: {}")
+
+
+def test_ct002_without_mqtt_insights_leaves_mqtt_sending_alone(
+    tmp_path: Path,
+) -> None:
+    assert "USE_MQTT_IDF_ENQUEUE" not in _generated_defines(tmp_path, "")
