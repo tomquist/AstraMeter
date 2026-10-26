@@ -170,8 +170,9 @@ Optional sub-blocks nest under the same `ct002:` key:
   auto-target / distribution-weight controls and a force-rotation button). It
   also answers Marstek-app polls on your MQTT broker, so the emulator shows up in
   the app without hame-relay. With Bluetooth on, it answers as the CT the app
-  added. Requires an `mqtt:` block. See
-  [MQTT Insights](../mqtt-insights.md).
+  added. Requires an `mqtt:` block, and turns on that block's
+  `idf_send_async`, so a broker dropping the connection can't stall the meter.
+  See [MQTT Insights](../mqtt-insights.md).
 - **`marstek_registration:`** — registers a managed CT002/CT003 with your Marstek
   cloud account on first boot (the same flow as the Python `[MARSTEK]` section).
   It saves the assigned MAC and feeds it back into `ct002.ct_mac`. Requires an

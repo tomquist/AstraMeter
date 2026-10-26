@@ -1340,6 +1340,14 @@ async def _to_code_mqtt_insights(config, ct002_var):
     # Reported as the HA discovery `origin` block's sw_version, the way the
     # Python stack reports its own SHA there.
     cg.add(var.set_git_commit(_astrameter_git_commit()))
+    # What `mqtt: idf_send_async: true` turns on: ESPHome's ESP32 MQTT client
+    # otherwise publishes synchronously, and a publish into a connection the
+    # broker has just reset blocks until esp-mqtt's 10 s network timeout. Ours
+    # run from ct002's poll-reply listeners, inside ct002's loop(), so a flaky
+    # broker would stall the main loop until the task watchdog reset the
+    # board. Queued, ESPHome's own MQTT task waits out the timeout instead.
+    if CORE.is_esp32:
+        cg.add_define("USE_MQTT_IDF_ENQUEUE")
 
 
 async def _to_code_marstek_registration(config, ct002_var):
