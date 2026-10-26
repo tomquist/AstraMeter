@@ -17,6 +17,7 @@
 #include "esphome/core/application.h"
 #include "esphome/core/log.h"
 
+#include "cloud_reporting_url.h"
 #include "controls.h"
 #include "ha_discovery.h"
 
@@ -652,16 +653,11 @@ void MqttInsightsComponent::publish_marstek_reply_(const PollContext &poll) {
     }
     body = format_cd4_slave_csv(rows);
   } else {
-    // ver_v is hardcoded to DEFAULT_VER_V here. Python derives it per-binding
-    // from the Marstek cloud device list's `version` field
-    // (ver_v_from_marstek_api_version), but on the ESPHome path that value
-    // isn't plumbed from marstek_registration into the responder — and when
-    // the cloud `version` is absent Python falls back to this same default,
-    // so the wire frame matches the common case. Wiring the real firmware
-    // version through would be a registration↔insights data flow we don't
-    // have yet.
+    // A real CT reports its own firmware version as `ver_v`, the same constant
+    // it sends as the handshake's `sv` and over Bluetooth. Mirrors main.py's
+    // _bind_marstek_responder.
     body = build_aggregate_response(this->ct002_->latest_grid_power(), this->ct002_->wifi_rssi(),
-                                    DEFAULT_VER_V,
+                                    cloud_reporting::reporting_firmware_version(this->marstek_ct_type_),
                                     static_cast<int>(this->ct002_->connected_slave_count()),
                                     /*echo_cd1=*/true);
   }

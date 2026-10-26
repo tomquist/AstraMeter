@@ -303,7 +303,8 @@ download host.)
 
 The handshake does **not** set the device record's `version`. A registered
 `HME-4` record whose `version` was `148` kept it after handshakes sending
-`sv=124`. Earlier notes said the call also writes `aid` into the record's
+`sv=124`. That `148` was what AstraMeter's MQTT responder then sent as
+`ver_v`; it now sends the firmware version, as a real CT does. Earlier notes said the call also writes `aid` into the record's
 `type`, so that a non‑model `aid` turns the Marstek app's device card into a
 generic one. That part has not been re‑checked, so AstraMeter still sends the
 CT model as `aid`, and as `sv` the version a reporting CT of that model runs.

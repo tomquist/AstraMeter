@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Fixed** the Marstek app being told firmware version 148 for the emulated CT002/CT003 over MQTT; it now gets the same version a real one reports, 124 for CT002 and 122 for CT003.
+
 - **Fixed** the ESP32 build briefly ignoring the batteries every five minutes while cloud reporting was on, because each report held up the meter for a few seconds; it now reports in the background ([#749](https://github.com/tomquist/astrameter/pull/749)).
 
 - **Added** answers to the Marstek app's CT002 **Diagnose** on the ESP32 build: it passes while the board receives meter readings, and fails once they stop, instead of ending in a communication error. To report your real grid voltage and frequency, there and in cloud reporting, set `voltage_sensor_l1`–`l3` and `frequency_sensor` under `ct002:` ([#746](https://github.com/tomquist/astrameter/pull/746)).
