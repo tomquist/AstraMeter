@@ -993,7 +993,12 @@ def build_scenarios() -> dict[str, Scenario]:
             base_load=[400.0, 0.0, 0.0],
             base_noise=0.0,
             build_events=_unscripted,
-            ct_kwargs={**_EFF_MODE, "min_efficient_power": 500.0},
+            # No rotation within the run, so the slot is still the small
+            # battery's when it empties.
+            ct_kwargs={
+                "min_efficient_power": 500.0,
+                "efficiency_rotation_interval": 86400.0,
+            },
             meter_interval_s=10.0,
         )
     )

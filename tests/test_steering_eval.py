@@ -1068,3 +1068,15 @@ def test_peak_shaving_scenario_holds_the_threshold() -> None:
     assert res["cost_regret_ct"] < 1.0
     for key in _REPORT_METRICS:
         assert res[key] >= 0, key
+
+
+def test_repeating_meter_scenario_hands_the_load_over() -> None:
+    """The active battery runs empty while the meter keeps reporting the same
+    reading, and the other battery still takes the load over."""
+    sc = build_scenarios()["repeating_meter_empty_head/eff"]
+    res = asyncio.run(run_scenario(sc, seed=1))
+    # The small battery really empties within the run...
+    assert res["soc_min"] == 0.0
+    # ...and the 400 W does not stay on the grid afterwards: ~45 min of it
+    # would be ~300 Wh.
+    assert res["avoidable_import_wh"] < 50
