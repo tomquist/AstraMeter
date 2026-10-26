@@ -260,7 +260,7 @@ which app screens send the command, where known.
 | `0x06` | ✓ | ✓ | `01` | none (clears config, reboots) | probably "factory reset", see below |
 | `0x08` | ✓ | ✓ | `01` | SSID as ASCII | Wi-Fi setup |
 | `0x09` | ✓ | ✓ | `01` | none (reboots) | probably "hardware reset", see below |
-| `0x10` | ✓ | – | `01` | – | not sent by the CT screens |
+| `0x10` | ✓ | – | ignored | 1-byte result | never sent by the app; zero-offset calibration, see [`0x10`](#0x10--ct002-zero-offset-calibration) |
 | `0x11` | – | ✓ | 4 bytes | 1-byte result | CT003 meter configuration |
 | `0x12` | ✓ | ✓ | `00` | ASCII list of linked batteries, see [`0x12`](#0x12--linked-batteries) | CT screens |
 | `0x13` | ✓ | – | ignored | 3 × uint16 + 1 byte | CT002 diagnostics (voltage) |
@@ -268,8 +268,10 @@ which app screens send the command, where known.
 | `0x15` | ✓ | – | `01` | 3 × uint16 + 1 byte | CT002 diagnostics (voltage phase angle) |
 | `0x16` | ✓ | – | `01` | 3 × int16 | CT002 diagnostics (active power) |
 | `0x17` | ✓ | – | direction bits | the bits in effect | CT002 current-direction reverse |
-| `0x18` | – | ✓ | – | – | unknown |
-| `0x27`–`0x29` | ✓ | ✓ | – | – | unknown |
+| `0x18` | – | ✓ | ignored | none | never sent to a meter; the CT003 accepts it and does nothing, see [`0x18`](#0x18--not-a-meter-command) |
+| `0x27` | ✓ | ✓ | sample count, 1–30 | per-phase power history, see [`0x27` / `0x28`](#0x27--0x28--power-history) | never sent by the app |
+| `0x28` | ✓ | ✓ | sample count, 1–30 | total power history | never sent by the app |
+| `0x29` | ✓ | ✓ | ASCII text | none; updates the Wi-Fi module, see [`0x29`](#0x29--wi-fi-module-update) | never sent by the app |
 | `0x50`, `0x51` | ✓ | ✓ | sub-command byte + data | – | probably firmware-update / module control |
 
 Any other command byte, for example `0x07`, `0x0a`–`0x0f` or (on CT002)
@@ -437,11 +439,54 @@ diagnosis, retry?", with no upload.
   reads the current setting from byte 22 of the status reply. The MQTT
   equivalent is `cd=5,dir=<bits>`.
 
+### `0x10` — CT002 zero-offset calibration
+
+`0x10` zeroes the metering chip's per-phase offsets. The meter clears the
+three offset registers, then averages 500 raw readings of each phase. If any
+reading is too large, meaning a load is connected, it stops there and leaves
+the offsets cleared. Otherwise it writes the average back as the new offset.
+It ignores the request payload. The reply is one byte: `1` when it
+calibrated, `0` when it stopped. The CT003 has no `0x10`. The app never sends
+it.
+
+### `0x18` — not a meter command
+
+The CT003's command handling has a case for `0x18` that does nothing: no
+reply, no change. The CT002 has none. The app never sends `0x18` to a meter.
+It's the "pair with this CT" command the app sends to Venus and Marstek-SE
+batteries, carrying the chosen CT's MAC and type (on a Venus over MQTT,
+`cd=18,meter=<CT MAC>`). Jupiter batteries use `0x15` for it, B2500 batteries
+`0x31`.
+
+### `0x27` / `0x28` — power history
+
+The CT002 keeps the last 30 seconds of power, one sample a second in whole
+watts: each phase and the total. The CT003 answers both commands in the same
+format; what feeds its samples was not traced. The request payload is one
+byte: how many samples to return, 1 to 30. The reply payload holds one list
+per series, newest sample first: the byte `[` (`0x5B`), n samples as
+little-endian `int16`, then `]` (`0x5D`). Lists are separated by `,`
+(`0x2C`).
+
+- `0x27` returns the three phases, `[…],[…],[…]`.
+- `0x28` returns the total, `[…]`.
+- A count of 0 or above 30 gets a one-byte `00` instead.
+
+On the CT002 the MQTT equivalents are `cd=29,p1=<n>` and `cd=30,p1=<n>`.
+They answer with the same samples as decimal text, `p1=[…],p2=[…],p3=[…]` and
+`p1=[…]`. The app never sends either command.
+
+### `0x29` — Wi-Fi module update
+
+The payload is passed to the Wi-Fi module as `AT+QWLANOTA=<payload>`, the
+module's command to update its own firmware over the air. When the module
+reports success, the meter restarts. There is no reply. The app never sends it.
+
 ### Not covered
 
-- **`0x10`, `0x18`, `0x27`–`0x29`, `0x50`, `0x51`.** The meter handles
-  these, but their payloads were not decoded. `0x50` and `0x51` take a
-  sub-command byte and look like firmware-update and module-control functions.
+- **`0x50`, `0x51`.** The meter handles these, but their payloads were not
+  decoded. They take a sub-command byte and look like firmware-update and
+  module-control functions.
 - **Other frame families.** The app also has frames that start with `0xAA`,
   `0x21` or `0xA8`. These are bootloader and OTA transfers for other Marstek
   devices; the meters don't use them.
