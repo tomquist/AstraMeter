@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from astrameter.config.logger import logger
 from astrameter.ct002.controls import (
+    BATTERY_POWER_MAX,
     CONSUMER_CONTROLS_BY_FIELD,
     DEVICE_SETTINGS,
     ControllableDevice,
@@ -832,6 +833,8 @@ class MqttInsightsService:
             "min_dc_output": data.get("min_dc_output"),
             "min_charge_power": data.get("min_charge_power", 0.0),
             "min_discharge_power": data.get("min_discharge_power", 0.0),
+            "max_charge_power": data.get("max_charge_power", BATTERY_POWER_MAX),
+            "max_discharge_power": data.get("max_discharge_power", BATTERY_POWER_MAX),
         }
 
         await _publish_json(client, state_topic, consumer_state)

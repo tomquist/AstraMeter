@@ -94,7 +94,7 @@ then read the reference docs as needed:
 - **[Powermeter sources](docs/powermeters.md)** — the `config.ini` section for
   each supported meter.
 - **[CT002 / CT003 steering](docs/ct002.md)** — the CT emulator, active control,
-  peak shaving, multi-battery balancing, minimum battery power, efficiency
+  peak shaving, multi-battery balancing, battery power limits, efficiency
   optimization, and Marstek cloud registration.
 - **[Live status dashboard](docs/dashboard.md)** — the built-in web UI. It shows
   live grid and per-battery state, and lets you edit your configuration in the

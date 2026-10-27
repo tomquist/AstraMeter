@@ -41,6 +41,10 @@ class ControllableDevice(Protocol):
     def set_consumer_min_discharge_power(
         self, consumer_id: str, value: float
     ) -> None: ...
+    def set_consumer_max_charge_power(self, consumer_id: str, value: float) -> None: ...
+    def set_consumer_max_discharge_power(
+        self, consumer_id: str, value: float
+    ) -> None: ...
     def set_active_control(self, active: bool) -> None: ...
     def set_peakshaving_threshold(self, threshold: float) -> None: ...
     def force_efficiency_rotation(self) -> None: ...
@@ -112,7 +116,8 @@ def parse_bool(payload: str) -> bool | None:
 
 
 #: Upper bound of a per-battery power setting, in W: the most a three-phase
-#: connection on the default 16 A fuse can carry (3 x 230 V x 16 A).
+#: connection on the default 16 A fuse can carry (3 x 230 V x 16 A).  A
+#: maximum charge / discharge power at this bound is no limit at all.
 BATTERY_POWER_MAX = 3 * 230.0 * 16.0
 
 CONSUMER_CONTROLS: tuple[ConsumerControl, ...] = (
@@ -136,6 +141,15 @@ CONSUMER_CONTROLS: tuple[ConsumerControl, ...] = (
     ConsumerControl(
         "min_discharge_power",
         "set_consumer_min_discharge_power",
+        0.0,
+        BATTERY_POWER_MAX,
+    ),
+    ConsumerControl(
+        "max_charge_power", "set_consumer_max_charge_power", 0.0, BATTERY_POWER_MAX
+    ),
+    ConsumerControl(
+        "max_discharge_power",
+        "set_consumer_max_discharge_power",
         0.0,
         BATTERY_POWER_MAX,
     ),

@@ -103,6 +103,7 @@ def test_ct_settings_are_typed_values_not_strings() -> None:
             "import_trim_w": 12.5,
             "min_charge_power": 30,
             "min_discharge_power": 50,
+            "max_charge_power": 600,
             "saturation_grace_seconds": 200,
             "saturation_stall_timeout_seconds": 180,
             "pace_base_step": 40,
@@ -121,6 +122,8 @@ def test_ct_settings_are_typed_values_not_strings() -> None:
     assert ct.import_trim_w == 12.5
     assert ct.min_charge_power == 30.0
     assert ct.min_discharge_power == 50.0
+    assert ct.max_charge_power == 600.0
+    assert ct.max_discharge_power is None
     assert ct.saturation_grace_seconds == 200.0
     assert ct.saturation_stall_timeout_seconds == 180.0
     assert ct.pace_base_step == 40

@@ -299,6 +299,8 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         "IMPORT_TRIM_W": {"type": "float", "min": 0},
         "MIN_CHARGE_POWER": {"type": "float", "min": 0, "max": 11040},
         "MIN_DISCHARGE_POWER": {"type": "float", "min": 0, "max": 11040},
+        "MAX_CHARGE_POWER": {"type": "float", "min": 0, "max": 11040},
+        "MAX_DISCHARGE_POWER": {"type": "float", "min": 0, "max": 11040},
         "SATURATION_DETECTION": {"type": "boolean"},
         "SATURATION_ALPHA": {"type": "float", "min": 0, "max": 1},
         "MIN_TARGET_FOR_SATURATION": {"type": "integer"},

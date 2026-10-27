@@ -44,6 +44,12 @@ configuration:
   min_discharge_power:
     name: Min Discharge Power
     description: "Lowest power (in watts) a battery discharges at. When its share of the household demand is smaller, it stays idle and the other batteries or the grid cover it, because a battery discharges least efficiently at a few watts. It resumes once its share is 20% above the minimum. Each battery can override this from Home Assistant. 0 = no minimum (default). Only applies to CT002/CT003 device types."
+  max_charge_power:
+    name: Max Charge Power
+    description: "Most power (in watts) a battery charges at; the other batteries, or the grid, take what is left of the surplus. 0 keeps it from charging. Each battery can override this from Home Assistant. Leave empty for no limit (default). Only applies to CT002/CT003 device types."
+  max_discharge_power:
+    name: Max Discharge Power
+    description: "Most power (in watts) a battery discharges at; the other batteries, or the grid, cover the rest of the demand. 0 keeps it from discharging. Each battery can override this from Home Assistant. Leave empty for no limit (default). Only applies to CT002/CT003 device types."
   min_dc_output:
     name: Min DC Output
     description: "Minimum discharge (in watts) to keep a DC battery's inverter (e.g. Marstek B2500) from switching off at 0 W and falling asleep under high PV surplus. Applies per battery and only affects DC-only batteries without their own inverter (Venus and Jupiter are unaffected). Set to 0 to disable (default); recommended >= 20. Only applies to CT002/CT003 device types."

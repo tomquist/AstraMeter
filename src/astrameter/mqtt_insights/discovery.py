@@ -432,6 +432,26 @@ def build_ct002_consumer_discovery(
         mode="box",
         template="{{ value_json.min_discharge_power | default(0) }}",
     )
+    # Max Charge / Max Discharge Power — the most a battery is asked for; the
+    # top of the range is no limit.
+    components["max_charge_power"] = number(
+        "max_charge_power",
+        "Max Charge Power",
+        unit="W",
+        device_class="power",
+        step=1,
+        mode="box",
+        template="{{ value_json.max_charge_power | default(11040) }}",
+    )
+    components["max_discharge_power"] = number(
+        "max_discharge_power",
+        "Max Discharge Power",
+        unit="W",
+        device_class="power",
+        step=1,
+        mode="box",
+        template="{{ value_json.max_discharge_power | default(11040) }}",
+    )
 
     mac_slug = _sanitize_id(consumer_id).lower().replace("-", "").replace("_", "")
 

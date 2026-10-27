@@ -613,8 +613,8 @@ static float weighted_share(float total, const std::unordered_map<std::string, f
 }
 
 // weighted_share, water-filled against per-consumer ceilings: a consumer whose
-// share would pass its ceiling (a magnitude in *total*'s direction; absent or 0
-// = unlimited) is fixed there and the rest of *total* is split among the
+// share would pass its ceiling (a magnitude in *total*'s direction; absent =
+// unlimited, 0 = takes nothing) is fixed there and the rest of *total* is split among the
 // others, until nobody is over (issue #655). Mirrors balancer.py
 // capped_weighted_share.
 template<typename Ids>
@@ -634,10 +634,9 @@ static float capped_weighted_share(float total,
   while (sign != 0 && !free.empty()) {
     std::unordered_set<std::string> over;
     for (const auto &cid : free) {
-      const float ceiling = ceiling_of(cid);
-      if (ceiling > 0.0f &&
-          ceiling < weighted_share(remaining, weights, free, free.size(), &cid) *
-                        static_cast<float>(sign))
+      if (ceilings.count(cid) &&
+          ceiling_of(cid) < weighted_share(remaining, weights, free, free.size(), &cid) *
+                                static_cast<float>(sign))
         over.insert(cid);
     }
     if (over.empty()) break;
@@ -825,7 +824,7 @@ std::unordered_set<std::string> LoadBalancer::below_min_power_(
   }
   std::unordered_map<std::string, float> weights;
   for (const auto &cid : ids) weights[cid] = eff_part.at(cid) * this->share_weight_(reports, cid);
-  const auto ceilings = this->ceilings_(ids, sign);
+  const auto ceilings = this->ceilings_(reports, ids, sign);
   auto threshold = [&](const std::string &cid) {
     const float minimum = this->min_power_(reports.at(cid), sign);
     if (was_idle(cid))
@@ -891,7 +890,17 @@ std::array<float, 3> LoadBalancer::emit_(
     const std::optional<std::string> &consumer_id, NetOutputW desired, float reported,
     const ReportMap &reports, const std::unordered_map<std::string, float> *weights,
     bool pace, const std::string *single_phase, std::optional<float> last_target,
-    std::optional<float> intent_reading) {
+    std::optional<float> intent_reading, bool limited) {
+  // Cap *desired* at the battery's maximum, so no path asks for more and an
+  // intent above the cap is never recorded as a push it failed to follow.
+  if (limited && consumer_id) {
+    auto rit = reports.find(*consumer_id);
+    const ConsumerReport fallback{};
+    const int sign = sign_of(desired.value);
+    const auto cap = this->max_power_(rit != reports.end() ? rit->second : fallback, sign);
+    if (cap && desired.value * static_cast<float>(sign) > *cap)
+      desired = NetOutputW(*cap * static_cast<float>(sign));
+  }
   float reading = to_grid_reading(desired, reported);
   const float unpaced = reading;
   if (pace && consumer_id) {
@@ -1069,7 +1078,8 @@ void LoadBalancer::track_ceiling_(const std::string &consumer_id, BalancerConsum
 }
 
 template<typename Ids>
-std::unordered_map<std::string, float> LoadBalancer::ceilings_(const Ids &ids, int sign) const {
+std::unordered_map<std::string, float> LoadBalancer::ceilings_(const ReportMap &reports,
+                                                               const Ids &ids, int sign) const {
   // While the standby reserve spills in *sign*'s direction, a battery ahead of
   // it that is out of headroom for another reason (saturated, charge-blind) is
   // capped where it stands, so the water-fill hands the rest to the standby.
@@ -1077,9 +1087,8 @@ std::unordered_map<std::string, float> LoadBalancer::ceilings_(const Ids &ids, i
   std::unordered_map<std::string, float> out;
   for (const auto &id : ids) {
     const std::string &cid = key_of(id);
-    auto it = this->consumers_.find(cid);
-    const float ceiling = it != this->consumers_.end() ? it->second.ceiling(sign) : 0.0f;
-    if (ceiling > 0.0f) out[cid] = ceiling;
+    const auto ceiling = this->limit_(reports, cid, sign);
+    if (ceiling) out[cid] = *ceiling;
     if (spill_caps) {
       auto cap = this->spill_caps_.find(cid);
       if (cap != this->spill_caps_.end()) {
@@ -1091,11 +1100,39 @@ std::unordered_map<std::string, float> LoadBalancer::ceilings_(const Ids &ids, i
   return out;
 }
 
+// Its own MAX_CHARGE_POWER / MAX_DISCHARGE_POWER override wins over the global
+// one; unset means no limit, as does BATTERY_POWER_MAX or more. Mirrors
+// balancer.py _max_power.
+std::optional<float> LoadBalancer::max_power_(const ConsumerReport &report, int sign) const {
+  std::optional<float> cap;
+  if (sign > 0) {
+    cap = report.max_discharge_power ? report.max_discharge_power : this->cfg_.max_discharge_power;
+  } else if (sign < 0) {
+    cap = report.max_charge_power ? report.max_charge_power : this->cfg_.max_charge_power;
+  }
+  if (!cap || *cap >= controls::BATTERY_POWER_MAX) return std::nullopt;
+  return std::max(0.0f, *cap);
+}
+
+// The lower of the configured maximum and the ceiling the battery was observed
+// to hold at, kept apart so raising one never leaves the other behind.
+// Mirrors balancer.py _limit.
+std::optional<float> LoadBalancer::limit_(const ReportMap &reports,
+                                          const std::string &consumer_id, int sign) const {
+  auto it = this->consumers_.find(consumer_id);
+  const float learned = it != this->consumers_.end() ? it->second.ceiling(sign) : 0.0f;
+  auto rit = reports.find(consumer_id);
+  const ConsumerReport fallback{};
+  const auto cap = this->max_power_(rit != reports.end() ? rit->second : fallback, sign);
+  if (learned <= 0.0f) return cap;
+  return cap ? std::min(learned, *cap) : learned;
+}
+
 std::unordered_set<std::string> LoadBalancer::pinned_(
     const ReportMap &reports, const std::unordered_map<std::string, float> &ids,
     int sign) const {
   std::unordered_set<std::string> out;
-  for (const auto &kv : this->ceilings_(ids, sign)) {
+  for (const auto &kv : this->ceilings_(reports, ids, sign)) {
     auto it = reports.find(kv.first);
     const float power = it != reports.end() ? it->second.power : 0.0f;
     if (power * static_cast<float>(sign) >= kv.second - CEILING_AT_MARGIN_W) out.insert(kv.first);
@@ -1140,7 +1177,9 @@ std::array<float, 3> LoadBalancer::compute_target(
                                ? active_reports[*consumer_id].power
                                : 0.0f;
     const auto result =
-        this->emit_(consumer_id, NetOutputW(mode.manual_value), reported, active_reports);
+        // A manual target is the user's own command: no maximum applies.
+        this->emit_(consumer_id, NetOutputW(mode.manual_value), reported, active_reports,
+                    nullptr, false, nullptr, std::nullopt, std::nullopt, /*limited=*/false);
     this->log_steer_(consumer_id, mode, active_reports, grid_total, result);
     return result;
   }
@@ -1395,7 +1434,7 @@ int LoadBalancer::ceiling_retest_(const std::optional<std::string> &consumer_id,
       this->clock_() - state.ceiling_seen(sign) < CEILING_RETEST_SECONDS ||
       control_grid * fsign < -2.0f * CEILING_PUSH_W)
     return 0;
-  auto others = this->ceilings_(ids, sign);
+  auto others = this->ceilings_(reports, ids, sign);
   others.erase(*consumer_id);
   const float share = capped_weighted_share(total, weights, ids, others, &*consumer_id);
   return (share - power) * fsign >= CEILING_PUSH_W ? sign : 0;
@@ -1687,9 +1726,8 @@ std::optional<float> LoadBalancer::no_headroom_(
   if (sit != this->consumers_.end() && threshold > 0.0 &&
       sit->second.saturation_score >= threshold)
     return std::max(std::fabs(report.power), SPILL_MIN_CAP_W);
-  const float ceiling = sit != this->consumers_.end() ? sit->second.ceiling(sign) : 0.0f;
-  if (ceiling > 0.0f && report.power * static_cast<float>(sign) >= ceiling - margin)
-    return ceiling;
+  const auto ceiling = this->limit_(reports, consumer_id, sign);
+  if (ceiling && report.power * static_cast<float>(sign) >= *ceiling - margin) return *ceiling;
   return std::nullopt;
 }
 
@@ -2236,7 +2274,7 @@ bool LoadBalancer::concentration_pool_balanced_(const ReportMap &reports,
     actual_total += rep.power;
     weights[*cid] = this->share_weight_(reports, *cid);
   }
-  const auto ceilings = this->ceilings_(conc_ids, sign_of(actual_total));
+  const auto ceilings = this->ceilings_(reports, conc_ids, sign_of(actual_total));
   for (const auto *cid : conc_ids) {
     const float target_share =
         capped_weighted_share(actual_total, weights, conc_ids, ceilings, cid);
@@ -2275,7 +2313,7 @@ float LoadBalancer::balance_correction_(const std::string &consumer_id,
   // (issue #655).
   const float target_share = capped_weighted_share(
       actual_total, weights, participating,
-      this->ceilings_(participating, sign_of(actual_total)), &consumer_id);
+      this->ceilings_(reports, participating, sign_of(actual_total)), &consumer_id);
   const float error = target_share - actual_self;
   const float err_abs = std::fabs(error);
   if (cfg.balance_deadband > 0.0f && err_abs < cfg.balance_deadband) return fair_share;

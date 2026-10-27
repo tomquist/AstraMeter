@@ -231,6 +231,8 @@ void write_consumer(JsonWriter &json, const ConsumerStatus &consumer) {
   json.set("min_dc_output_applicable", consumer.min_dc_output_applicable);
   json.set("min_charge_power_w", static_cast<double>(consumer.min_charge_power_w), 1);
   json.set("min_discharge_power_w", static_cast<double>(consumer.min_discharge_power_w), 1);
+  json.set("max_charge_power_w", static_cast<double>(consumer.max_charge_power_w), 1);
+  json.set("max_discharge_power_w", static_cast<double>(consumer.max_discharge_power_w), 1);
   if (consumer.balancer.has_value()) write_consumer_balancer(json, *consumer.balancer);
   json.end_object();
 }

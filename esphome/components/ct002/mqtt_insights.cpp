@@ -297,6 +297,8 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
     }
     root["min_charge_power"] = snap.min_charge_power;
     root["min_discharge_power"] = snap.min_discharge_power;
+    root["max_charge_power"] = snap.max_charge_power;
+    root["max_discharge_power"] = snap.max_discharge_power;
   });
   if (!this->mqtt_->publish(state_topic, state_buf, 0, true))
     this->forget_state_publish_(consumer_id);
@@ -539,15 +541,20 @@ void MqttInsightsComponent::handle_consumer_field_command_(const std::string &co
     } else {
       ESP_LOGW(TAG, "Out-of-range min_dc_output for %s: %.1f", consumer_id.c_str(), v);
     }
-  } else if (field == "min_charge_power" || field == "min_discharge_power") {
+  } else if (field == "min_charge_power" || field == "min_discharge_power" ||
+             field == "max_charge_power" || field == "max_discharge_power") {
     float v;
     if (!parse_float_payload(payload, v)) {
       ESP_LOGW(TAG, "Invalid %s for %s: %s", field.c_str(), consumer_id.c_str(), payload.c_str());
     } else if (std::isfinite(v) && v >= 0.0f && v <= controls::BATTERY_POWER_MAX) {
       if (field == "min_charge_power") {
         this->ct002_->set_consumer_min_charge_power(consumer_id, v);
-      } else {
+      } else if (field == "min_discharge_power") {
         this->ct002_->set_consumer_min_discharge_power(consumer_id, v);
+      } else if (field == "max_charge_power") {
+        this->ct002_->set_consumer_max_charge_power(consumer_id, v);
+      } else {
+        this->ct002_->set_consumer_max_discharge_power(consumer_id, v);
       }
     } else {
       ESP_LOGW(TAG, "Out-of-range %s for %s: %.1f", field.c_str(), consumer_id.c_str(), v);

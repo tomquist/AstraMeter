@@ -28,6 +28,7 @@ from .balancer import (
     device_capabilities,
     phase_index,
 )
+from .controls import BATTERY_POWER_MAX
 from .protocol import (
     ETX,
     RESPONSE_LABELS,
@@ -167,8 +168,15 @@ def _control_quality_evidence(quality: ControlQualitySnapshot) -> dict[str, Any]
     }
 
 
-def _min_power_value(name: str, value: float) -> float:
-    """*value* as a minimum charge / discharge power: finite and ``>= 0``."""
+def _effective_max(own: float | None, default: float | None) -> float:
+    """A battery's maximum power in effect (W): its own setting, else the
+    global one, BATTERY_POWER_MAX when neither limits it."""
+    cap = default if own is None else own
+    return BATTERY_POWER_MAX if cap is None else min(cap, BATTERY_POWER_MAX)
+
+
+def _power_setting(name: str, value: float) -> float:
+    """*value* as a charge / discharge power setting: finite and ``>= 0``."""
     v = float(value)
     if not math.isfinite(v) or v < 0.0:
         msg = f"{name} must be finite and >= 0, got {value!r}"
@@ -314,6 +322,12 @@ class Consumer:
     # Charge Power" / "Min Discharge Power" entities.
     min_charge_power: float | None = None
     min_discharge_power: float | None = None
+    # Per-device overrides (W) for MAX_CHARGE_POWER / MAX_DISCHARGE_POWER;
+    # ``None`` inherits the global setting, BATTERY_POWER_MAX or more is no
+    # limit.  Tuned live via the MQTT "Max Charge Power" / "Max Discharge
+    # Power" entities.
+    max_charge_power: float | None = None
+    max_discharge_power: float | None = None
     # Last UDP source address seen for this consumer, if the protocol provides it.
     last_ip: str = ""
 
@@ -339,6 +353,8 @@ class ConsumerOverride:
     min_dc_output: float | None = None
     min_charge_power: float | None = None
     min_discharge_power: float | None = None
+    max_charge_power: float | None = None
+    max_discharge_power: float | None = None
 
 
 # Lowercase phase label carried on reporting rows: the three physical phases,
@@ -433,6 +449,9 @@ class ConsumerSnapshot:
     # In effect for this battery: its own setting, else the global one.
     min_charge_power: float
     min_discharge_power: float
+    # BATTERY_POWER_MAX when the battery has no limit.
+    max_charge_power: float
+    max_discharge_power: float
     builtin_inverter: bool
     ac_input: bool
     dc_input: bool
@@ -617,6 +636,8 @@ class CT002:
         consumer.min_dc_output = override.min_dc_output
         consumer.min_charge_power = override.min_charge_power
         consumer.min_discharge_power = override.min_discharge_power
+        consumer.max_charge_power = override.max_charge_power
+        consumer.max_discharge_power = override.max_discharge_power
 
     def _snapshot_override(self, consumer: Consumer) -> None:
         """Record a consumer's current control state so it survives eviction.
@@ -633,6 +654,8 @@ class CT002:
             min_dc_output=consumer.min_dc_output,
             min_charge_power=consumer.min_charge_power,
             min_discharge_power=consumer.min_discharge_power,
+            max_charge_power=consumer.max_charge_power,
+            max_discharge_power=consumer.max_discharge_power,
         )
 
     def set_consumer_value(self, consumer_id: str, values: list[float]) -> None:
@@ -707,7 +730,7 @@ class CT002:
         for this battery; ``0`` lets it charge at any power.
         """
         consumer = self._get_consumer(consumer_id)
-        consumer.min_charge_power = _min_power_value("min_charge_power", value)
+        consumer.min_charge_power = _power_setting("min_charge_power", value)
         self._snapshot_override(consumer)
 
     def set_consumer_min_discharge_power(self, consumer_id: str, value: float) -> None:
@@ -718,8 +741,44 @@ class CT002:
         any power.
         """
         consumer = self._get_consumer(consumer_id)
-        consumer.min_discharge_power = _min_power_value("min_discharge_power", value)
+        consumer.min_discharge_power = _power_setting("min_discharge_power", value)
         self._snapshot_override(consumer)
+
+    def set_consumer_max_charge_power(self, consumer_id: str, value: float) -> None:
+        """Set the per-device MAX_CHARGE_POWER (W) for a battery.
+
+        Must be finite and ``>= 0``.  Overrides the global ``MAX_CHARGE_POWER``
+        for this battery; ``0`` keeps it from charging, BATTERY_POWER_MAX
+        lifts the limit.
+        """
+        consumer = self._get_consumer(consumer_id)
+        consumer.max_charge_power = _power_setting("max_charge_power", value)
+        self._snapshot_override(consumer)
+
+    def set_consumer_max_discharge_power(self, consumer_id: str, value: float) -> None:
+        """Set the per-device MAX_DISCHARGE_POWER (W) for a battery.
+
+        Must be finite and ``>= 0``.  Overrides the global
+        ``MAX_DISCHARGE_POWER`` for this battery; ``0`` keeps it from
+        discharging, BATTERY_POWER_MAX lifts the limit.
+        """
+        consumer = self._get_consumer(consumer_id)
+        consumer.max_discharge_power = _power_setting("max_discharge_power", value)
+        self._snapshot_override(consumer)
+
+    def effective_max_charge_power(self, consumer_id: str) -> float:
+        """The MAX_CHARGE_POWER in effect for a battery (W); BATTERY_POWER_MAX
+        when it has none."""
+        consumer = self._consumers.get(consumer_id)
+        own = consumer.max_charge_power if consumer else None
+        return _effective_max(own, self._balancer.config.max_charge_power)
+
+    def effective_max_discharge_power(self, consumer_id: str) -> float:
+        """The MAX_DISCHARGE_POWER in effect for a battery (W);
+        BATTERY_POWER_MAX when it has none."""
+        consumer = self._consumers.get(consumer_id)
+        own = consumer.max_discharge_power if consumer else None
+        return _effective_max(own, self._balancer.config.max_discharge_power)
 
     def effective_min_charge_power(self, consumer_id: str) -> float:
         """The MIN_CHARGE_POWER in effect for a battery (W)."""
@@ -1026,6 +1085,8 @@ class CT002:
                 min_dc_output=c.min_dc_output,
                 min_charge_power=c.min_charge_power,
                 min_discharge_power=c.min_discharge_power,
+                max_charge_power=c.max_charge_power,
+                max_discharge_power=c.max_discharge_power,
             )
             for cid, c in self._consumers.items()
             if c.timestamp > 0 and c.phase in STEERED_PHASES
@@ -1148,6 +1209,8 @@ class CT002:
             min_dc_output_applicable=_needs_dc_output_floor(consumer.device_type),
             min_charge_power=self.effective_min_charge_power(consumer_id),
             min_discharge_power=self.effective_min_discharge_power(consumer_id),
+            max_charge_power=self.effective_max_charge_power(consumer_id),
+            max_discharge_power=self.effective_max_discharge_power(consumer_id),
             builtin_inverter=caps.has_builtin_inverter,
             ac_input=caps.has_ac_input,
             dc_input=caps.has_dc_input,
@@ -1790,6 +1853,8 @@ class CT002:
             "min_dc_output": consumer.min_dc_output if consumer else None,
             "min_charge_power": self.effective_min_charge_power(consumer_id),
             "min_discharge_power": self.effective_min_discharge_power(consumer_id),
+            "max_charge_power": self.effective_max_charge_power(consumer_id),
+            "max_discharge_power": self.effective_max_discharge_power(consumer_id),
             "active_control": self.active_control,
             "peakshaving_threshold": self.peakshaving_threshold,
             "efficiency_rotation": self._balancer.efficiency_rotation_enabled,

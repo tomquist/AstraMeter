@@ -191,6 +191,8 @@ def test_an_invalid_peakshaving_threshold_is_refused_like_python(
         ("min_dc_output", "5000"),
         ("min_charge_power", "11041"),
         ("min_discharge_power", "-1"),
+        ("max_charge_power", "-1"),
+        ("max_discharge_power", "11041"),
     ],
 )
 def test_out_of_range_is_refused_with_python_s_own_message(

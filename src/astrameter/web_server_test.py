@@ -841,6 +841,8 @@ async def test_control_write_applies_through_the_validated_setter(
         ("min_dc_output", 5000),
         ("min_charge_power", 11041),
         ("min_discharge_power", -1),
+        ("max_charge_power", 11041),
+        ("max_discharge_power", -1),
         ("active", "yes"),
         # bool is an int subclass: without a guard this would set 1.0 W.
         ("manual_target", True),

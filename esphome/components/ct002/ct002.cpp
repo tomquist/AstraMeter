@@ -565,6 +565,8 @@ void CT002Component::apply_override_(Consumer &consumer) {
   consumer.min_dc_output = ov.min_dc_output;
   consumer.min_charge_power = ov.min_charge_power;
   consumer.min_discharge_power = ov.min_discharge_power;
+  consumer.max_charge_power = ov.max_charge_power;
+  consumer.max_discharge_power = ov.max_discharge_power;
 }
 
 void CT002Component::snapshot_override_(const Consumer &consumer) {
@@ -579,6 +581,8 @@ void CT002Component::snapshot_override_(const Consumer &consumer) {
   ov.min_dc_output = consumer.min_dc_output;
   ov.min_charge_power = consumer.min_charge_power;
   ov.min_discharge_power = consumer.min_discharge_power;
+  ov.max_charge_power = consumer.max_charge_power;
+  ov.max_discharge_power = consumer.max_discharge_power;
 }
 
 void CT002Component::update_consumer_report_(const std::string &consumer_id,
@@ -650,6 +654,8 @@ ReportMap CT002Component::collect_reports_for_balancer_() const {
       r.min_dc_output = kv.second.min_dc_output;
       r.min_charge_power = kv.second.min_charge_power;
       r.min_discharge_power = kv.second.min_discharge_power;
+      r.max_charge_power = kv.second.max_charge_power;
+      r.max_discharge_power = kv.second.max_discharge_power;
       out[kv.first] = std::move(r);
     }
   }
@@ -1000,6 +1006,8 @@ CT002Component::ConsumerSnapshot CT002Component::snapshot_consumer(
   snap.min_dc_output = c.min_dc_output;
   snap.min_charge_power = this->effective_min_charge_power(c.consumer_id);
   snap.min_discharge_power = this->effective_min_discharge_power(c.consumer_id);
+  snap.max_charge_power = this->effective_max_charge_power(c.consumer_id);
+  snap.max_discharge_power = this->effective_max_discharge_power(c.consumer_id);
   snap.poll_interval = c.poll_interval;
   snap.answer_interval = c.answer_interval;
   snap.timestamp = c.timestamp;
@@ -1132,6 +1140,45 @@ void CT002Component::set_consumer_min_discharge_power(const std::string &consume
   auto &consumer = this->get_consumer_(consumer_id);
   consumer.min_discharge_power = value;
   this->snapshot_override_(consumer);
+}
+
+void CT002Component::set_consumer_max_charge_power(const std::string &consumer_id,
+                                                   float value) {
+  // Per-device MAX_CHARGE_POWER override (W); validation aligned with the
+  // Python setter (finite, >= 0). The control table bounds the entry range.
+  if (!std::isfinite(value) || value < 0.0f) return;
+  auto &consumer = this->get_consumer_(consumer_id);
+  consumer.max_charge_power = value;
+  this->snapshot_override_(consumer);
+}
+
+void CT002Component::set_consumer_max_discharge_power(const std::string &consumer_id,
+                                                      float value) {
+  // Per-device MAX_DISCHARGE_POWER override (W); see set_consumer_max_charge_power.
+  if (!std::isfinite(value) || value < 0.0f) return;
+  auto &consumer = this->get_consumer_(consumer_id);
+  consumer.max_discharge_power = value;
+  this->snapshot_override_(consumer);
+}
+
+// A battery's maximum power in effect: its own setting, else the global one,
+// BATTERY_POWER_MAX when neither limits it. Mirrors ct002.py _effective_max.
+static float effective_max(const std::optional<float> &own, const std::optional<float> &global) {
+  const auto cap = own ? own : global;
+  return cap ? std::min(*cap, controls::BATTERY_POWER_MAX) : controls::BATTERY_POWER_MAX;
+}
+
+float CT002Component::effective_max_charge_power(const std::string &consumer_id) const {
+  auto it = this->consumers_.find(consumer_id);
+  return effective_max(it != this->consumers_.end() ? it->second.max_charge_power : std::nullopt,
+                       this->balancer_cfg_.max_charge_power);
+}
+
+float CT002Component::effective_max_discharge_power(const std::string &consumer_id) const {
+  auto it = this->consumers_.find(consumer_id);
+  return effective_max(
+      it != this->consumers_.end() ? it->second.max_discharge_power : std::nullopt,
+      this->balancer_cfg_.max_discharge_power);
 }
 
 float CT002Component::effective_min_charge_power(const std::string &consumer_id) const {

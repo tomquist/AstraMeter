@@ -192,6 +192,10 @@ class CtSettings:
     # few watts; a battery's own setting overrides them. 0 = no minimum.
     min_charge_power: float = 0.0
     min_discharge_power: float = 0.0
+    # The most a battery is asked to charge / discharge; a battery's own
+    # setting overrides them. ``None`` = no limit, 0 = not in that direction.
+    max_charge_power: float | None = None
+    max_discharge_power: float | None = None
 
 
 @dataclass(frozen=True)

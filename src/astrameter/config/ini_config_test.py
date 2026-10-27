@@ -174,6 +174,9 @@ def _sample(field: dataclasses.Field) -> str:
         return str(default + 7)
     if isinstance(default, float):
         return str(round(default + 0.25, 4))
+    if default is None:
+        # An optional number unset by default (the maximum powers).
+        return "123"
     return f"{default}-changed" if default else "changed"
 
 

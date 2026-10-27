@@ -74,6 +74,8 @@ schema:
   min_dc_output: float(0,)?
   min_charge_power: float(0,11040)?
   min_discharge_power: float(0,11040)?
+  max_charge_power: float(0,11040)?
+  max_discharge_power: float(0,11040)?
   grid_predict_trust: float(0,1)?
   saturation_grace_seconds: float(1,)?
   saturation_stall_timeout_seconds: float(1,)?

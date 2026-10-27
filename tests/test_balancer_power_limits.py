@@ -1,10 +1,14 @@
-"""MIN_CHARGE_POWER / MIN_DISCHARGE_POWER: no battery runs at a few watts (#721).
+"""Per-battery power limits (#721).
 
-An inverter is least efficient at a few watts; a Venus E covering a 19 W
-night standby runs at about 68 %.  Below its minimum a battery idles at 0 W and
-the other batteries, or the grid, take its share.  It resumes once its share
-reaches EFFICIENCY_HYSTERESIS_FACTOR times the minimum, so a demand hovering at
-the minimum does not toggle it.
+MIN_CHARGE_POWER / MIN_DISCHARGE_POWER: an inverter is least efficient at a
+few watts; a Venus E covering a 19 W night standby runs at about 68 %.  Below
+its minimum a battery idles at 0 W and the other batteries, or the grid, take
+its share.  It resumes once its share reaches EFFICIENCY_HYSTERESIS_FACTOR
+times the minimum, so a demand hovering at the minimum does not toggle it.
+
+MAX_CHARGE_POWER / MAX_DISCHARGE_POWER: the most a battery is asked for; the
+others, or the grid, take the rest.  0 keeps it out of that direction, and
+BATTERY_POWER_MAX or more is no limit.
 """
 
 from __future__ import annotations
@@ -207,3 +211,100 @@ def test_report_and_config_defaults_mean_no_minimum():
     assert BalancerConfig(min_discharge_power=1e9).min_discharge_power == (
         BATTERY_POWER_MAX
     )
+
+
+class TestMaximum:
+    def test_a_single_battery_is_capped(self):
+        device = _ct002(max_discharge_power=300.0)
+        device._update_consumer_report("a", "A", 0)
+        assert _send(device, 800) == 300
+        device._update_consumer_report("a", "A", 300)
+        # Already at its cap: the remaining 500 W stays on the grid.
+        assert _send(device, 500) == 0
+
+    def test_charging_has_its_own_cap(self):
+        device = _ct002(max_charge_power=200.0)
+        device._update_consumer_report("a", "A", 0)
+        assert _send(device, -800) == -200
+        # Discharging is unaffected by the charge cap.
+        assert _send(device, 800) == 800
+
+    def test_zero_keeps_a_battery_out_of_that_direction(self):
+        device = _ct002(max_charge_power=0.0)
+        device._update_consumer_report("a", "A", 0)
+        assert _send(device, -500) == 0
+        # One already charging is wound back to 0 W.
+        device._update_consumer_report("a", "A", -150)
+        assert _send(device, -350) == 150
+
+    def test_the_others_take_what_a_capped_battery_cannot(self):
+        device = _ct002(fair_distribution=False)
+        device._update_consumer_report("a", "A", 100)
+        device._update_consumer_report("b", "A", 250)
+        device.set_consumer_max_discharge_power("a", 100.0)
+        # The house needs 500 W: a holds its 100 W, b covers the other 400 W.
+        assert _send(device, 150, "a") == 0
+        assert _send(device, 150, "b") == 150
+
+    def test_a_battery_blocked_in_one_direction_hands_over_all_of_it(self):
+        device = _ct002(fair_distribution=False)
+        device._update_consumer_report("a", "A", 0)
+        device._update_consumer_report("b", "A", 0)
+        device.set_consumer_max_charge_power("a", 0.0)
+        assert _send(device, -400, "a") == 0
+        assert _send(device, -400, "b") == -400
+
+    def test_a_battery_setting_overrides_the_global_one(self):
+        device = _ct002(max_discharge_power=300.0)
+        device._update_consumer_report("a", "A", 0)
+        device.set_consumer_max_discharge_power("a", 500.0)
+        assert _send(device, 800) == 500
+        assert device.effective_max_discharge_power("a") == 500.0
+
+    def test_the_top_of_the_range_is_no_limit(self):
+        device = _ct002(max_discharge_power=300.0)
+        device._update_consumer_report("a", "A", 0)
+        device.set_consumer_max_discharge_power("a", BATTERY_POWER_MAX)
+        assert _send(device, 3000) == 3000
+
+    def test_no_limit_reads_as_the_top_of_the_range(self):
+        device = _ct002()
+        device._update_consumer_report("a", "A", 0)
+        assert device.effective_max_charge_power("a") == BATTERY_POWER_MAX
+        assert device.effective_max_discharge_power("a") == BATTERY_POWER_MAX
+
+    def test_a_manual_target_is_not_capped(self):
+        device = _ct002(max_discharge_power=300.0)
+        device._update_consumer_report("a", "A", 0)
+        device.set_consumer_auto_target("a", False)
+        device.set_consumer_manual_target("a", 600.0)
+        assert _send(device, 0) == 600
+
+    def test_a_cap_below_the_minimum_keeps_the_battery_idle(self):
+        device = _ct002(min_discharge_power=100.0, max_discharge_power=60.0)
+        device._update_consumer_report("a", "A", 0)
+        assert _send(device, 500) == 0
+        assert _idle(device, "a")
+
+    def test_the_cap_survives_eviction(self):
+        device = _ct002()
+        device._update_consumer_report("a", "A", 0)
+        device.set_consumer_max_charge_power("a", 400.0)
+        del device._consumers["a"]
+        assert device._get_consumer("a").max_charge_power == 400.0
+
+    def test_the_controls_share_the_bound(self):
+        for field in ("max_charge_power", "max_discharge_power"):
+            control = CONSUMER_CONTROLS_BY_FIELD[field]
+            assert control.coerce(0) == 0
+            assert control.coerce(BATTERY_POWER_MAX) == BATTERY_POWER_MAX
+            with pytest.raises(ValueError):
+                control.coerce(BATTERY_POWER_MAX + 1)
+
+    def test_config_default_is_no_limit(self):
+        cfg = BalancerConfig()
+        assert cfg.max_charge_power is None
+        assert cfg.max_discharge_power is None
+        assert BalancerConfig(max_charge_power=1e9).max_charge_power == (
+            BATTERY_POWER_MAX
+        )

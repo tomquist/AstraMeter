@@ -1491,6 +1491,12 @@ class _FakeDevice:
     def set_consumer_min_discharge_power(self, cid: str, v: float) -> None:
         self._record("min_discharge_power", cid, v)
 
+    def set_consumer_max_charge_power(self, cid: str, v: float) -> None:
+        self._record("max_charge_power", cid, v)
+
+    def set_consumer_max_discharge_power(self, cid: str, v: float) -> None:
+        self._record("max_discharge_power", cid, v)
+
     def set_active_control(self, v: bool) -> None:
         self.active_control = v
         self._record("active_control", v)
@@ -2020,6 +2026,8 @@ def test_handle_consumer_field_command_dispatch() -> None:
     service._handle_consumer_field_command("dev1", "c1", "min_dc_output", "25")
     service._handle_consumer_field_command("dev1", "c1", "min_charge_power", "40")
     service._handle_consumer_field_command("dev1", "c1", "min_discharge_power", "11040")
+    service._handle_consumer_field_command("dev1", "c1", "max_charge_power", "0")
+    service._handle_consumer_field_command("dev1", "c1", "max_discharge_power", "800")
     assert device.latest() == {
         "active": False,
         "auto_target": True,
@@ -2029,6 +2037,8 @@ def test_handle_consumer_field_command_dispatch() -> None:
         "min_dc_output": 25.0,
         "min_charge_power": 40.0,
         "min_discharge_power": 11040.0,
+        "max_charge_power": 0.0,
+        "max_discharge_power": 800.0,
     }
 
     # 0.0 is a valid weight (battery takes no share / skipped for efficiency).
@@ -2058,6 +2068,8 @@ def test_handle_consumer_field_command_dispatch() -> None:
     service._handle_consumer_field_command("dev1", "c1", "min_dc_output", "2000")
     service._handle_consumer_field_command("dev1", "c1", "min_charge_power", "-1")
     service._handle_consumer_field_command("dev1", "c1", "min_discharge_power", "11041")
+    service._handle_consumer_field_command("dev1", "c1", "max_charge_power", "-1")
+    service._handle_consumer_field_command("dev1", "c1", "max_discharge_power", "11041")
     # The efficiency window weight is a percentage: 101 % is out of range.
     service._handle_consumer_field_command(
         "dev1", "c1", "efficiency_window_weight", "101"

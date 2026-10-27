@@ -52,9 +52,9 @@ class ConsumerReport:
     """One consumer's latest poll, as the balancer sees it.
 
     Every field is normalized on construction, so the control path reads plain
-    numbers and never re-parses or re-defaults. Only the per-device minimums
-    (``min_dc_output``, ``min_charge_power``, ``min_discharge_power``) are
-    nullable, where ``None`` means "no override".
+    numbers and never re-parses or re-defaults. Only the per-device power
+    settings (``min_dc_output`` and the minimum / maximum charge and discharge
+    power) are nullable, where ``None`` means "no override".
     """
 
     power: int = 0
@@ -86,10 +86,19 @@ class ConsumerReport:
     """Per-device MIN_DISCHARGE_POWER override in watts; ``None`` uses the global
     one."""
 
+    max_charge_power: float | None = None
+    """Per-device MAX_CHARGE_POWER override in watts; ``None`` uses the global
+    one, and BATTERY_POWER_MAX or more means no limit."""
+
+    max_discharge_power: float | None = None
+    """Per-device MAX_DISCHARGE_POWER override in watts; see ``max_charge_power``."""
+
     def __post_init__(self) -> None:
         floor = self.min_dc_output
         min_charge = self.min_charge_power
         min_discharge = self.min_discharge_power
+        max_charge = self.max_charge_power
+        max_discharge = self.max_discharge_power
         for field, value in (
             ("power", parse_int(self.power)),
             ("phase", (self.phase or "A").upper()),
@@ -107,6 +116,14 @@ class ConsumerReport:
             (
                 "min_discharge_power",
                 None if min_discharge is None else max(0.0, float(min_discharge)),
+            ),
+            (
+                "max_charge_power",
+                None if max_charge is None else max(0.0, float(max_charge)),
+            ),
+            (
+                "max_discharge_power",
+                None if max_discharge is None else max(0.0, float(max_discharge)),
             ),
         ):
             object.__setattr__(self, field, value)
@@ -147,7 +164,8 @@ def capped_weighted_share(
     """:func:`weighted_share`, water-filled against per-consumer ceilings.
 
     *ceilings* holds the most each consumer can output in *total*'s direction,
-    as a magnitude; absent or zero means unlimited.  A consumer whose share
+    as a magnitude; absent means unlimited, and ``0`` means it takes nothing
+    (a MAX_*_POWER of 0).  A consumer whose share
     would pass its ceiling is fixed there and the rest of *total* is split
     among the others, repeated until nobody is over, so the unlimited batteries
     carry what the limited ones cannot (issue #655).
@@ -159,9 +177,8 @@ def capped_weighted_share(
         over = [
             cid
             for cid in free
-            if 0.0
-            < ceilings.get(cid, 0.0)
-            < weighted_share(remaining, weights, free, cid) * sign
+            if cid in ceilings
+            and ceilings[cid] < weighted_share(remaining, weights, free, cid) * sign
         ]
         if not over:
             break
@@ -498,6 +515,13 @@ class BalancerConfig:
     # (``ConsumerReport``) overrides these.  ``0`` disables.
     min_charge_power: float = 0
     min_discharge_power: float = 0
+    # Maximum charge / discharge (W) a battery is asked for: its command is
+    # capped there and the others, or the grid, take the rest (see
+    # ``_max_power``).  ``None`` (or BATTERY_POWER_MAX and above) is no limit;
+    # ``0`` keeps the battery out of that direction.  A battery's own setting
+    # (``ConsumerReport``) overrides these.
+    max_charge_power: float | None = None
+    max_discharge_power: float | None = None
     # Ramp pacing (issue #458): each consumer's sent reading is clamped to a cap
     # that starts at ``pace_base_step`` (the firmware's first-step gain), grows
     # x2 toward ``pace_max_step`` only while the battery is observed tracking,
@@ -555,6 +579,9 @@ class BalancerConfig:
         _clamp("min_dc_output", 0, float("inf"))
         _clamp("min_charge_power", 0, BATTERY_POWER_MAX)
         _clamp("min_discharge_power", 0, BATTERY_POWER_MAX)
+        for name in ("max_charge_power", "max_discharge_power"):
+            if getattr(self, name) is not None:
+                _clamp(name, 0, BATTERY_POWER_MAX)
         _clamp("pace_base_step", 0, float("inf"))
         _clamp("pace_max_step", self.pace_base_step, float("inf"))
         _clamp("osc_damp_max", 0.0, 1.0)
@@ -1727,25 +1754,57 @@ class LoadBalancer:
                 reason,
             )
 
-    def _ceilings(self, ids: Collection[str], sign: int) -> dict[str, float]:
-        """Learned ceilings of *ids* in direction *sign*, where one is known.
+    def _ceilings(
+        self, reports: Reports, ids: Collection[str], sign: int
+    ) -> dict[str, float]:
+        """Ceilings of *ids* in direction *sign*, where one is known.
 
-        While the standby reserve spills in *sign*'s direction, a battery
-        ahead of it that is out of headroom for another reason (saturated,
-        charge-blind) is capped where it stands, so the water-fill hands the
-        rest to the standby (see :meth:`_update_spill`).
+        The lower of a learned ceiling and the battery's MAX_*_POWER (see
+        :meth:`_limit`).  While the standby reserve spills in *sign*'s
+        direction, a battery ahead of it that is out of headroom for another
+        reason (saturated, charge-blind) is capped where it stands, so the
+        water-fill hands the rest to the standby (see :meth:`_update_spill`).
         """
         out: dict[str, float] = {}
         spill_caps = self._spill_caps if sign != 0 and sign == self._spill_dir else {}
         for cid in ids:
-            state = self._consumers.get(cid)
-            ceiling = state.ceiling(sign) if state is not None else 0.0
-            if ceiling > 0.0:
+            ceiling = self._limit(reports, cid, sign)
+            if ceiling is not None:
                 out[cid] = ceiling
             cap = spill_caps.get(cid)
             if cap is not None:
                 out[cid] = min(out.get(cid, cap), cap)
         return out
+
+    def _max_power(self, report: ConsumerReport, sign: int) -> float | None:
+        """The most *report*'s battery is asked for in direction *sign* (W).
+
+        Its own MAX_CHARGE_POWER / MAX_DISCHARGE_POWER override wins over the
+        global one; ``None`` means no limit, as does BATTERY_POWER_MAX or more.
+        """
+        if sign > 0:
+            own, default = report.max_discharge_power, self._cfg.max_discharge_power
+        elif sign < 0:
+            own, default = report.max_charge_power, self._cfg.max_charge_power
+        else:
+            return None
+        cap = default if own is None else own
+        return None if cap is None or cap >= BATTERY_POWER_MAX else cap
+
+    def _limit(self, reports: Reports, consumer_id: str, sign: int) -> float | None:
+        """The ceiling (W) *consumer_id* has in direction *sign*, or ``None``.
+
+        The lower of its configured maximum and the ceiling it was observed
+        to hold at.  The two are kept apart: a learned ceiling is evidence
+        that ages out, a maximum is a setting, and raising one must not leave
+        the other behind.
+        """
+        state = self._consumers.get(consumer_id)
+        learned = state.ceiling(sign) if state is not None else 0.0
+        cap = self._max_power(_report_of(reports, consumer_id), sign)
+        if learned <= 0.0:
+            return cap
+        return learned if cap is None else min(learned, cap)
 
     def _share_weight(self, reports: Reports, consumer_id: str | None) -> float:
         """*consumer_id*'s Distribution Weight as the share math sees it.
@@ -1783,8 +1842,8 @@ class LoadBalancer:
         threshold = self._cfg.efficiency_saturation_threshold
         if state is not None and threshold > 0 and state.saturation_score >= threshold:
             return max(abs(report.power), SPILL_MIN_CAP_W)
-        ceiling = state.ceiling(sign) if state is not None else 0.0
-        if ceiling > 0.0 and report.power * sign >= ceiling - margin:
+        ceiling = self._limit(reports, consumer_id, sign)
+        if ceiling is not None and report.power * sign >= ceiling - margin:
             return ceiling
         return None
 
@@ -1966,7 +2025,7 @@ class LoadBalancer:
         """Consumers of *ids* already at their ceiling in direction *sign*."""
         return {
             cid
-            for cid, ceiling in self._ceilings(ids, sign).items()
+            for cid, ceiling in self._ceilings(reports, ids, sign).items()
             if _report_of(reports, cid).power * sign >= ceiling - CEILING_AT_MARGIN_W
         }
 
@@ -2019,11 +2078,13 @@ class LoadBalancer:
 
         if consumer_mode.mode == "manual" and state is not None:
             reported = _report_of(active_reports, consumer_id).power
+            # A manual target is the user's own command: no maximum applies.
             result = self._emit(
                 consumer_id,
                 NetOutputW(consumer_mode.manual_value),
                 reported,
                 active_reports,
+                limited=False,
             )
             self._log_steer(
                 consumer_id, consumer_mode, active_reports, grid_total, result
@@ -2397,7 +2458,7 @@ class LoadBalancer:
             # No direction to judge a minimum in: nobody changes state.
             return {cid for cid in ids if was_idle(cid)}
         weights = {cid: eff_part[cid] * self._share_weight(reports, cid) for cid in ids}
-        ceilings = self._ceilings(ids, sign)
+        ceilings = self._ceilings(reports, ids, sign)
 
         def threshold(cid: str) -> float:
             minimum = self._min_power(reports[cid], sign)
@@ -2468,6 +2529,7 @@ class LoadBalancer:
         single_phase: str | None = None,
         last_target: float | None = None,
         intent_reading: float | None = None,
+        limited: bool = True,
     ) -> list[float]:
         """Turn an absolute net-output target into the phase vector to send.
 
@@ -2482,7 +2544,19 @@ class LoadBalancer:
         wind-down records 0, and driving to zero is an intentional "produce
         nothing" command rather than a failed-to-follow one, so it registers as
         idle and lets saturation decay.
+
+        *desired* is capped at the battery's MAX_CHARGE_POWER /
+        MAX_DISCHARGE_POWER first, unless *limited* is false (a manual target),
+        so no path — share, probe, spill, the MIN_DC_OUTPUT floor — asks for
+        more, and an intent above the cap is never recorded as a push the
+        battery failed to follow.
         """
+        if limited and consumer_id:
+            report = _report_of(reports, consumer_id)
+            sign = _sign(desired)
+            cap = self._max_power(report, sign)
+            if cap is not None and desired * sign > cap:
+                desired = NetOutputW(cap * sign)
         reading = to_grid_reading(desired, reported)
         unpaced = reading
         if pace and consumer_id:
@@ -2800,7 +2874,7 @@ class LoadBalancer:
             or control_grid * sign < -2 * CEILING_PUSH_W
         ):
             return 0
-        others = self._ceilings(ids, sign)
+        others = self._ceilings(reports, ids, sign)
         del others[consumer_id]
         share = capped_weighted_share(
             total,
@@ -3230,7 +3304,7 @@ class LoadBalancer:
             return False
         actual_total = sum(_report_of(reports, cid).power for cid in conc_ids)
         weights = {cid: self._share_weight(reports, cid) for cid in conc_ids}
-        ceilings = self._ceilings(conc_ids, _sign(actual_total))
+        ceilings = self._ceilings(reports, conc_ids, _sign(actual_total))
         for cid in conc_ids:
             actual_self = _report_of(reports, cid).power
             target_share = capped_weighted_share(
@@ -3267,7 +3341,7 @@ class LoadBalancer:
             actual_total,
             weights,
             participating,
-            self._ceilings(participating, _sign(actual_total)),
+            self._ceilings(reports, participating, _sign(actual_total)),
             consumer_id,
         )
         error = target_share - actual_self

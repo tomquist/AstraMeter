@@ -356,11 +356,14 @@ client has the same controls:
   for that battery.
 - **Min Charge Power** / **Min Discharge Power** — below these a battery stays
   idle at 0 W instead of charging or discharging at a few watts, where it is
-  least efficient (see
-  [Minimum charge and discharge power](ct002.md#minimum-charge-and-discharge-power)).
-  Each shows the value in effect for the battery, the global
-  `MIN_CHARGE_POWER` / `MIN_DISCHARGE_POWER` until you set its own; setting it
-  overrides the global one for that battery. `0` lets it run at any power.
+  least efficient. `0` lets it run at any power.
+- **Max Charge Power** / **Max Discharge Power** — the most the battery is asked
+  to charge or discharge at; the others, or the grid, take the rest. `0` keeps
+  it out of that direction, and `11040`, the top of the range, means no limit.
+
+Each of the four shows the value in effect for the battery, the global
+`MIN_*` / `MAX_*` setting until you set its own; setting it overrides the global
+one for that battery (see [Battery power limits](ct002.md#battery-power-limits)).
 
 The CT device itself also exposes two config controls:
 

@@ -96,7 +96,8 @@ function chip(status: Health): VNode {
 
 // A sparkline's viewBox. Fixed units, scaled by CSS: the drawing has no idea
 // how wide the card it lands in is.
-/** Bound of a per-battery power setting: 3 x 230 V x 16 A (BATTERY_POWER_MAX). */
+/** Bound of a per-battery power setting: 3 x 230 V x 16 A (BATTERY_POWER_MAX);
+ * a maximum at this bound is no limit. */
 const BATTERY_POWER_MAX_W = 11040;
 
 const SPARK_W = 100;
@@ -833,6 +834,27 @@ function consumerControls(
       step: 1,
       busy: busy("min_charge_power"),
       onCommit: (v) => set("min_charge_power", v),
+    }),
+    // The most the battery is asked for; the top of the range is no limit.
+    numberControl({
+      label: "Max discharge",
+      unit: "W",
+      value: pend("max_discharge_power", consumer.max_discharge_power_w),
+      min: 0,
+      max: BATTERY_POWER_MAX_W,
+      step: 1,
+      busy: busy("max_discharge_power"),
+      onCommit: (v) => set("max_discharge_power", v),
+    }),
+    numberControl({
+      label: "Max charge",
+      unit: "W",
+      value: pend("max_charge_power", consumer.max_charge_power_w),
+      min: 0,
+      max: BATTERY_POWER_MAX_W,
+      step: 1,
+      busy: busy("max_charge_power"),
+      onCommit: (v) => set("max_charge_power", v),
     }),
   );
 }

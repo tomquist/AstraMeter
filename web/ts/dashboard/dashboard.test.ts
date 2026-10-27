@@ -1151,6 +1151,8 @@ const controllable: StatusSnapshot = {
           min_dc_output_applicable: true,
           min_discharge_power_w: 50,
           min_charge_power_w: 0,
+          max_discharge_power_w: 800,
+          max_charge_power_w: 11040,
         },
       ],
     },
@@ -1171,6 +1173,8 @@ has(ctrlHtml, 'min="0" max="100" step="5"', "efficiency window keeps the MQTT ra
 has(ctrlHtml, 'min="0" max="1000" step="1"', "min DC output keeps the MQTT range");
 has(ctrlHtml, 'aria-label="Min discharge"', "min discharge power is offered");
 has(ctrlHtml, 'aria-label="Min charge"', "min charge power is offered");
+has(ctrlHtml, 'aria-label="Max discharge"', "max discharge power is offered");
+has(ctrlHtml, 'aria-label="Max charge"', "max charge power is offered");
 has(ctrlHtml, 'min="0" max="11040" step="1"', "min charge/discharge keep the MQTT range");
 has(ctrlHtml, "60%", "the slider shows its value");
 

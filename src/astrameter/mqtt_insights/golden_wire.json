@@ -633,6 +633,38 @@
             "command_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff/min_discharge_power/set",
             "retain": true,
             "entity_category": "config"
+          },
+          "max_charge_power": {
+            "platform": "number",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_max_charge_power",
+            "name": "Max Charge Power",
+            "unit_of_measurement": "W",
+            "device_class": "power",
+            "min": 0.0,
+            "max": 11040.0,
+            "step": 1,
+            "mode": "box",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "value_template": "{{ value_json.max_charge_power | default(11040) }}",
+            "command_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff/max_charge_power/set",
+            "retain": true,
+            "entity_category": "config"
+          },
+          "max_discharge_power": {
+            "platform": "number",
+            "unique_id": "astrameter_ct002_dev1_aa_bb_cc_dd_ee_ff_max_discharge_power",
+            "name": "Max Discharge Power",
+            "unit_of_measurement": "W",
+            "device_class": "power",
+            "min": 0.0,
+            "max": 11040.0,
+            "step": 1,
+            "mode": "box",
+            "state_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff",
+            "value_template": "{{ value_json.max_discharge_power | default(11040) }}",
+            "command_topic": "am/ct002/dev1/consumer/aa:bb:cc:dd:ee:ff/max_discharge_power/set",
+            "retain": true,
+            "entity_category": "config"
           }
         },
         "availability_mode": "all",
@@ -921,6 +953,38 @@
             "command_topic": "am/ct002/dev1/consumer/aabbccddeeff/min_discharge_power/set",
             "retain": true,
             "entity_category": "config"
+          },
+          "max_charge_power": {
+            "platform": "number",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_max_charge_power",
+            "name": "Max Charge Power",
+            "unit_of_measurement": "W",
+            "device_class": "power",
+            "min": 0.0,
+            "max": 11040.0,
+            "step": 1,
+            "mode": "box",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.max_charge_power | default(11040) }}",
+            "command_topic": "am/ct002/dev1/consumer/aabbccddeeff/max_charge_power/set",
+            "retain": true,
+            "entity_category": "config"
+          },
+          "max_discharge_power": {
+            "platform": "number",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_max_discharge_power",
+            "name": "Max Discharge Power",
+            "unit_of_measurement": "W",
+            "device_class": "power",
+            "min": 0.0,
+            "max": 11040.0,
+            "step": 1,
+            "mode": "box",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.max_discharge_power | default(11040) }}",
+            "command_topic": "am/ct002/dev1/consumer/aabbccddeeff/max_discharge_power/set",
+            "retain": true,
+            "entity_category": "config"
           }
         },
         "availability_mode": "all",
@@ -1206,6 +1270,38 @@
             "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
             "value_template": "{{ value_json.min_discharge_power | default(0) }}",
             "command_topic": "am/ct002/dev1/consumer/aabbccddeeff/min_discharge_power/set",
+            "retain": true,
+            "entity_category": "config"
+          },
+          "max_charge_power": {
+            "platform": "number",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_max_charge_power",
+            "name": "Max Charge Power",
+            "unit_of_measurement": "W",
+            "device_class": "power",
+            "min": 0.0,
+            "max": 11040.0,
+            "step": 1,
+            "mode": "box",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.max_charge_power | default(11040) }}",
+            "command_topic": "am/ct002/dev1/consumer/aabbccddeeff/max_charge_power/set",
+            "retain": true,
+            "entity_category": "config"
+          },
+          "max_discharge_power": {
+            "platform": "number",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_max_discharge_power",
+            "name": "Max Discharge Power",
+            "unit_of_measurement": "W",
+            "device_class": "power",
+            "min": 0.0,
+            "max": 11040.0,
+            "step": 1,
+            "mode": "box",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.max_discharge_power | default(11040) }}",
+            "command_topic": "am/ct002/dev1/consumer/aabbccddeeff/max_discharge_power/set",
             "retain": true,
             "entity_category": "config"
           }
@@ -1701,6 +1797,38 @@
             "retain": true,
             "entity_category": "config"
           },
+          "max_charge_power": {
+            "platform": "number",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_max_charge_power",
+            "name": "Max Charge Power",
+            "unit_of_measurement": "W",
+            "device_class": "power",
+            "min": 0.0,
+            "max": 11040.0,
+            "step": 1,
+            "mode": "box",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.max_charge_power | default(11040) }}",
+            "command_topic": "am/ct002/dev1/consumer/aabbccddeeff/max_charge_power/set",
+            "retain": true,
+            "entity_category": "config"
+          },
+          "max_discharge_power": {
+            "platform": "number",
+            "unique_id": "astrameter_ct002_dev1_aabbccddeeff_max_discharge_power",
+            "name": "Max Discharge Power",
+            "unit_of_measurement": "W",
+            "device_class": "power",
+            "min": 0.0,
+            "max": 11040.0,
+            "step": 1,
+            "mode": "box",
+            "state_topic": "am/ct002/dev1/consumer/aabbccddeeff",
+            "value_template": "{{ value_json.max_discharge_power | default(11040) }}",
+            "command_topic": "am/ct002/dev1/consumer/aabbccddeeff/max_discharge_power/set",
+            "retain": true,
+            "entity_category": "config"
+          },
           "last_seen": {
             "platform": "sensor"
           }
@@ -1794,7 +1922,9 @@
         "efficiency_window_weight": 0.5,
         "min_dc_output": 25.0,
         "min_charge_power": 0.0,
-        "min_discharge_power": 0.0
+        "min_discharge_power": 0.0,
+        "max_charge_power": 11040.0,
+        "max_discharge_power": 11040.0
       },
       "qos": 0,
       "retain": true
@@ -1870,6 +2000,8 @@
           "last_seen",
           "last_target",
           "manual_target",
+          "max_charge_power",
+          "max_discharge_power",
           "min_charge_power",
           "min_dc_output",
           "min_discharge_power",
@@ -1904,6 +2036,8 @@
           "grid_power_total",
           "last_target",
           "manual_target",
+          "max_charge_power",
+          "max_discharge_power",
           "min_charge_power",
           "min_dc_output",
           "min_discharge_power",
@@ -1951,7 +2085,9 @@
         "efficiency_window_weight": 0.5,
         "min_dc_output": 25.0,
         "min_charge_power": 0.0,
-        "min_discharge_power": 0.0
+        "min_discharge_power": 0.0,
+        "max_charge_power": 11040.0,
+        "max_discharge_power": 11040.0
       },
       "qos": 0,
       "retain": true
@@ -2005,7 +2141,9 @@
         "efficiency_window_weight": 0.5,
         "min_dc_output": 25.0,
         "min_charge_power": 0.0,
-        "min_discharge_power": 0.0
+        "min_discharge_power": 0.0,
+        "max_charge_power": 11040.0,
+        "max_discharge_power": 11040.0
       },
       "qos": 0,
       "retain": true
@@ -2062,6 +2200,8 @@
           "last_seen",
           "last_target",
           "manual_target",
+          "max_charge_power",
+          "max_discharge_power",
           "min_charge_power",
           "min_dc_output",
           "min_discharge_power",
@@ -2096,6 +2236,8 @@
           "grid_power_total",
           "last_target",
           "manual_target",
+          "max_charge_power",
+          "max_discharge_power",
           "min_charge_power",
           "min_dc_output",
           "min_discharge_power",

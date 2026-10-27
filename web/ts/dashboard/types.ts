@@ -97,6 +97,9 @@ export interface ConsumerStatus {
   /** In effect for this battery: its own setting, else the global one. */
   min_charge_power_w?: number;
   min_discharge_power_w?: number;
+  /** BATTERY_POWER_MAX (11040) when the battery has no limit. */
+  max_charge_power_w?: number;
+  max_discharge_power_w?: number;
   balancer?: BalancerConsumer;
 }
 

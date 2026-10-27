@@ -132,6 +132,8 @@ struct ConsumerStatus {
   bool min_dc_output_applicable{false};
   float min_charge_power_w{0.0f};
   float min_discharge_power_w{0.0f};
+  float max_charge_power_w{0.0f};
+  float max_discharge_power_w{0.0f};
   std::optional<BalancerConsumerSnapshot> balancer;
 };
 
