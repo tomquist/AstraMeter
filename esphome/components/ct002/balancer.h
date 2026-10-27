@@ -106,6 +106,30 @@ inline constexpr const char *CONTROL_QUALITY_STATES[] = {"idle", "warmup", "stab
                                                          "off_target", "limited"};
 
 inline constexpr double EFFICIENCY_HYSTERESIS_FACTOR = 1.2;
+// Standby reserve (efficiency mode only). A battery outside the active set
+// ("standby": faded fully out, which includes a 0 % efficiency window weight
+// sunk to the tail) stays at 0 W until every battery ahead of it is out of
+// headroom in the demand's direction: at its learned ceiling, saturated, or
+// DC-only under a surplus. Then the standbys take only the overflow, one at a
+// time in rotation order, and give it back first when the demand falls (see
+// LoadBalancer::update_spill_). A spiller joins the share math with its weight
+// scaled by SPILL_WEIGHT per rank. Mirrors balancer.py.
+inline constexpr float SPILL_WEIGHT = 0.01f;
+inline constexpr float SPILL_MIN_DEMAND_W = 30.0f;
+// A spiller still carrying more than SPILL_HOLD_W once the batteries ahead
+// regain headroom is released only after SPILL_RELEASE_SECONDS.
+inline constexpr float SPILL_HOLD_W = 15.0f;
+inline constexpr double SPILL_RELEASE_SECONDS = 10.0;
+// An error this small against the spill direction is left to the regular
+// share instead of being unloaded from the spillers first.
+inline constexpr float SPILL_UNLOAD_DEADBAND_W = 30.0f;
+// Cap for a battery ahead that cannot move in the spill direction at all; above
+// zero, since a zero cap reads as "no cap" in the water-fill.
+inline constexpr float SPILL_MIN_CAP_W = 1e-3f;
+// Saturation grace for a standby joining from 0 W, so a slow starter (a DC-only
+// battery) is not capped where it stands, while an empty one is still passed
+// over within seconds.
+inline constexpr double SPILL_JOIN_GRACE_SECONDS = 20.0;
 inline constexpr double SATURATION_GRACE_SECONDS = 90.0;
 inline constexpr double SATURATION_STALL_TIMEOUT_SECONDS = 60.0;
 inline constexpr double SATURATION_REFERENCE_DT = 1.0;
@@ -428,7 +452,7 @@ float saturation_floor(const BalancerConsumerState &state, const ConsumerReport 
 struct SteerLog {
   std::string consumer_id;
   std::string mode;      // "auto", "inactive", or "manual=<target>"
-  std::string rotation;  // "active", "deprioritized", or "probing"
+  std::string rotation;  // "active", "deprioritized", "overflow", or "probing"
   float weight{1.0f};
   float grid{0.0f};
   std::optional<float> control_grid{};
@@ -695,10 +719,10 @@ class LoadBalancer {
                         const std::unordered_set<std::string> &charge_blind);
   // This consumer's weight-proportional slice of the grid error. Mirrors
   // balancer.py _fair_share.
-  static float fair_share_(const std::optional<std::string> &consumer_id,
+  float fair_share_(const std::optional<std::string> &consumer_id,
                            const ReportMap &reports, float control_grid,
                            const std::unordered_map<std::string, float> &eff_part,
-                           const std::unordered_set<std::string> &pinned);
+                           const std::unordered_set<std::string> &pinned) const;
   // Deadband concentration, or absent when it doesn't apply this tick. Mirrors
   // balancer.py _concentrated_share.
   std::optional<float> concentrated_share_(
@@ -744,7 +768,29 @@ class LoadBalancer {
   size_t active_slots_(float abs_target, size_t n, bool was_limiting,
                        size_t prev_slots) const;
   bool maybe_force_swap_saturated_(std::vector<std::string> &priority, size_t slots,
-                                   double now);
+                                   double now, const ReportMap &reports, float grid_total);
+
+  // Standby reserve. Mirrors balancer.py _share_weight, _no_headroom,
+  // _clear_spill, _drop_spiller, _update_spill, _spill_takes, _spill_delivery,
+  // _spill_target and _unload_lifo.
+  float share_weight_(const ReportMap &reports, const std::string &consumer_id) const;
+  std::optional<float> no_headroom_(const std::string &consumer_id, const ReportMap &reports,
+                                    int sign,
+                                    const std::unordered_set<std::string> &charge_blind,
+                                    float margin) const;
+  void clear_spill_();
+  void drop_spiller_(const std::string &consumer_id);
+  void update_spill_(const ReportMap &reports, float control_grid,
+                     const std::unordered_map<std::string, float> &faded,
+                     const std::unordered_set<std::string> &charge_blind);
+  bool spilling_contains_(const std::string &consumer_id) const;
+  std::unordered_map<std::string, float> spill_takes_(const ReportMap &reports,
+                                                      float error) const;
+  float spill_delivery_(const ReportMap &reports, float grid_total) const;
+  std::array<float, 3> spill_target_(const std::string &consumer_id, const ReportMap &reports,
+                                     float error, bool hold);
+  float unload_lifo_(const std::string &consumer_id, const ReportMap &reports,
+                     float control_grid, const std::unordered_map<std::string, float> &eff_part);
   // Drop the control state of consumers that have left the pool. consumers_
   // runs parallel to priority_, so a consumer that stops reporting but still
   // holds a rotation slot keeps its state. Mirrors balancer.py _prune_pool.
@@ -762,6 +808,16 @@ class LoadBalancer {
   std::unordered_set<std::string> deprioritized_;
   std::vector<std::string> priority_;
   double last_rotation_;
+  // Standby reserve: the spilling standbys in rotation order, the direction
+  // they carry the overflow in, the caps standing in for a ceiling on the
+  // batteries ahead that are out of headroom for another reason, each
+  // spiller's share-weight scale (a per-tick map in place of rewriting the
+  // reports), and when a held spiller's batteries ahead regained headroom.
+  std::vector<std::string> spilling_;
+  int spill_dir_{0};
+  std::unordered_map<std::string, float> spill_caps_;
+  std::unordered_map<std::string, float> spill_scale_;
+  std::optional<double> spill_free_since_;
 
   // Efficiency cache. The Python side keys on (sample_id, tuple(priority_));
   // we serialize both into a single string to avoid templating an

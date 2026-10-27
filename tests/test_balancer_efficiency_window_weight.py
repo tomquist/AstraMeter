@@ -3,8 +3,10 @@
 The efficiency rotation deprioritizes some batteries at low demand (so the
 active ones stay above ``min_efficient_power``) and rotates which one is active
 for fair wear. ``efficiency_window_weight`` (a report-dict field, ``[0, 1]``,
-neutral ``1.0``) biases that rotation: ``0.0`` parks a battery while limiting,
-``1.0`` is full participation, and the active head holds its slot for
+neutral ``1.0``) biases that rotation: ``0.0`` keeps a battery deprioritized
+while limiting — a backup that never leads, which the standby reserve still
+hands what the batteries ahead cannot cover (see
+``test_balancer_standby_reserve.py``) — ``1.0`` is full participation, and the active head holds its slot for
 ``efficiency_rotation_interval`` scaled by its weight — the last of those only
 while a single battery is active, since above one slot a battery is active for
 its own turn and its predecessors' too.
@@ -65,7 +67,7 @@ def _report(power: float, eff_weight: float = 1.0) -> ConsumerReport:
 
 
 def test_zero_weight_battery_stays_deprioritized_while_limiting() -> None:
-    """A 0-weight battery is parked while limiting (enough non-zero peers)."""
+    """A 0-weight battery stays deprioritized while limiting (a standby)."""
     clock = _FakeClock()
     lb = _make_balancer(clock)
     # abs demand 200 over two units => per-consumer 100 < 150 => limiting,

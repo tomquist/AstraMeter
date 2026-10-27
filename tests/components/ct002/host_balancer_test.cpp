@@ -57,6 +57,14 @@ class TestableBalancer : public LoadBalancer {
   void set_saturation(const std::string &consumer_id, double score) {
     this->get_consumer_(consumer_id).saturation_score = score;
   }
+  // Standby reserve introspection (mirrors the Python tests' ``_spilling``).
+  const std::vector<std::string> &spilling() const { return this->spilling_; }
+  int spill_dir() const { return this->spill_dir_; }
+  const std::vector<std::string> &priority() const { return this->priority_; }
+  void begin_probe(const std::string &candidate, std::vector<std::string> active,
+                   std::vector<std::string> backups, double now) {
+    this->begin_probe_(candidate, active, backups, active, now);
+  }
 };
 
 TestableBalancer make_testable(double *clock, BalancerConfig cfg = {}) {
@@ -976,4 +984,225 @@ TEST(PowerCeilings, ARealCeilingSurvivesHoweverThePoolIsSteered) {
     }
     EXPECT_TRUE(pushed) << "fair=" << c.fair;
   }
+}
+
+// -------------------------------------------------------------------------
+// Standby reserve (efficiency mode). Mirrors tests/test_balancer_standby_reserve.py:
+// a closed loop over a minimal plant that adds each reading to its output,
+// within its limits, in whole watts.
+// -------------------------------------------------------------------------
+
+namespace {
+
+struct ReservePlant {
+  std::string device_type{"VNSE3"};
+  float discharge{800.0f};
+  float charge{2500.0f};
+  float window{1.0f};
+  float power{0.0f};
+  bool full{false};
+  bool empty{false};
+
+  void step(float reading) {
+    const float hi = this->empty ? 0.0f : this->discharge;
+    const bool dc_only = !is_ac_chargeable(this->device_type);
+    const float lo = (this->full || dc_only) ? 0.0f : -this->charge;
+    this->power = std::round(std::max(lo, std::min(hi, this->power + reading)));
+  }
+};
+
+struct ReserveLoop {
+  double clock{10000.0};
+  TestableBalancer lb;
+  std::vector<std::pair<std::string, ReservePlant>> bats;
+  float held_grid{0.0f};
+  int tick_no{0};
+  float last_grid{0.0f};
+
+  explicit ReserveLoop(std::vector<std::pair<std::string, ReservePlant>> plants,
+                       float min_efficient_power = 2500.0f)
+      : lb(make_reserve_balancer(&this->clock, min_efficient_power)), bats(std::move(plants)) {}
+
+  static TestableBalancer make_reserve_balancer(double *clock, float min_efficient_power) {
+    BalancerConfig cfg;
+    cfg.min_efficient_power = min_efficient_power;
+    cfg.efficiency_rotation_interval = 86400.0f;
+    return TestableBalancer(cfg, 0.15f, 20.0f, 0.995f, 90.0f, 60.0f, /*sat_enabled=*/true,
+                            [clock]() { return *clock; }, nullptr);
+  }
+
+  ReservePlant &bat(const std::string &cid) {
+    for (auto &kv : this->bats)
+      if (kv.first == cid) return kv.second;
+    return this->bats.front().second;
+  }
+
+  ReportMap reports() const {
+    ReportMap out;
+    for (const auto &kv : this->bats) {
+      ConsumerReport r{kv.second.device_type, "A", kv.second.power};
+      r.efficiency_window_weight = kv.second.window;
+      out[kv.first] = r;
+    }
+    return out;
+  }
+
+  void tick(float load, int meter_every = 1) {
+    float total = 0.0f;
+    for (const auto &kv : this->bats) total += kv.second.power;
+    if (this->tick_no % meter_every == 0) this->held_grid = std::round(load - total);
+    const auto reps = this->reports();
+    std::vector<float> readings;
+    for (const auto &kv : this->bats) {
+      const auto out = this->lb.compute_target(kv.first, ConsumerMode{}, reps, this->held_grid,
+                                               {}, {}, {this->held_grid});
+      readings.push_back(out[0] + out[1] + out[2]);
+    }
+    for (size_t i = 0; i < this->bats.size(); ++i) this->bats[i].second.step(readings[i]);
+    this->clock += 1.0;
+    this->tick_no += 1;
+    total = 0.0f;
+    for (const auto &kv : this->bats) total += kv.second.power;
+    this->last_grid = load - total;
+  }
+
+  void run(float load, int n, int meter_every = 1) {
+    for (int i = 0; i < n; ++i) this->tick(load, meter_every);
+  }
+};
+
+ReservePlant venus(float window = 1.0f) {
+  ReservePlant p;
+  p.window = window;
+  return p;
+}
+
+}  // namespace
+
+TEST(StandbyReserve, StandbyTakesOnlyTheOverflowPastTheHeadsCeiling) {
+  ReserveLoop loop({{"a", venus()}, {"b", venus()}});
+  loop.run(600.0f, 120);
+  EXPECT_GT(loop.bat("a").power, 580.0f);
+  EXPECT_EQ(loop.bat("b").power, 0.0f);
+  EXPECT_TRUE(loop.lb.spilling().empty());
+
+  loop.run(1200.0f, 240);
+  EXPECT_NEAR(loop.bat("a").power, 800.0f, 40.0f);
+  EXPECT_NEAR(loop.bat("b").power, 400.0f, 50.0f);
+  EXPECT_NEAR(loop.last_grid, 0.0f, 40.0f);
+  ASSERT_EQ(loop.lb.spilling().size(), 1u);
+  EXPECT_EQ(loop.lb.spilling().front(), "b");
+  EXPECT_EQ(loop.lb.spill_dir(), 1);
+}
+
+TEST(StandbyReserve, OverflowIsGivenBackFirstAndNeverPastZero) {
+  ReserveLoop loop({{"a", venus()}, {"b", venus()}});
+  loop.run(1200.0f, 240);
+  ASSERT_GT(loop.bat("b").power, 300.0f);
+  bool b_reached_zero = false;
+  for (int i = 0; i < 240; ++i) {
+    loop.tick(700.0f);
+    const float a = loop.bat("a").power;
+    const float b = loop.bat("b").power;
+    EXPECT_GE(b, 0.0f);
+    EXPECT_FALSE((a > 15.0f && b < -15.0f) || (a < -15.0f && b > 15.0f));
+    // Until the standby has nothing left, the head keeps carrying.
+    if (!b_reached_zero && b > 0.0f) {
+      EXPECT_GT(a, 700.0f);
+    }
+    if (b <= 0.0f) b_reached_zero = true;
+  }
+  EXPECT_EQ(loop.bat("b").power, 0.0f);
+  EXPECT_NEAR(loop.bat("a").power, 700.0f, 30.0f);
+}
+
+TEST(StandbyReserve, EmptyHeadHandsTheLoadToAZeroWindowBackup) {
+  ReserveLoop loop({{"a", venus()}, {"b", venus(0.0f)}});
+  loop.run(500.0f, 120);
+  EXPECT_EQ(loop.bat("b").power, 0.0f);
+  loop.bat("a").empty = true;
+  loop.run(500.0f, 240);
+  EXPECT_NEAR(loop.bat("b").power, 500.0f, 30.0f);
+  EXPECT_NEAR(loop.last_grid, 0.0f, 30.0f);
+  // The backup covers from behind; it never takes the lead.
+  EXPECT_EQ(loop.lb.priority().back(), "b");
+}
+
+TEST(StandbyReserve, FullHeadHandsTheSurplusToAZeroWindowBackup) {
+  ReserveLoop loop({{"a", venus()}, {"b", venus(0.0f)}});
+  loop.run(-1000.0f, 120);
+  EXPECT_EQ(loop.bat("b").power, 0.0f);
+  loop.bat("a").full = true;
+  loop.run(-1000.0f, 240);
+  EXPECT_NEAR(loop.bat("b").power, -1000.0f, 40.0f);
+  EXPECT_EQ(loop.lb.spill_dir(), -1);
+}
+
+TEST(StandbyReserve, DcOnlyStandbyIsPassedOverUnderASurplus) {
+  ReservePlant b2500;
+  b2500.device_type = "HMJ-2";
+  ReserveLoop loop({{"a", venus()}, {"b", b2500}, {"c", venus()}});
+  loop.run(-800.0f, 120);
+  loop.bat("a").full = true;
+  loop.run(-800.0f, 300);
+  EXPECT_NEAR(loop.bat("c").power, -800.0f, 40.0f);
+  EXPECT_EQ(loop.bat("b").power, 0.0f);
+}
+
+TEST(StandbyReserve, RepeatingMeterReadingStillHandsAnEmptiedHeadOver) {
+  ReserveLoop loop({{"a", venus()}, {"b", venus(0.0f)}});
+  loop.run(400.0f, 120, /*meter_every=*/10);
+  loop.bat("a").empty = true;
+  loop.run(400.0f, 300, /*meter_every=*/10);
+  EXPECT_NEAR(loop.bat("b").power, 400.0f, 40.0f);
+}
+
+TEST(StandbyReserve, ASpillingStandbyHoldsThroughAProbe) {
+  ReserveLoop loop({{"a", venus()}, {"b", venus()}, {"c", venus()}});
+  loop.run(1200.0f, 240);
+  ASSERT_EQ(loop.lb.spilling(), std::vector<std::string>{"b"});
+  loop.lb.begin_probe("c", {"c"}, {"a"}, loop.clock);
+  const auto reps = loop.reports();
+  const auto held =
+      loop.lb.compute_target(std::string("b"), ConsumerMode{}, reps, 20.0f, {}, {}, {20.0f});
+  EXPECT_EQ(held[0] + held[1] + held[2], 0.0f);
+  ASSERT_FALSE(loop.lb.spilling().empty());
+  loop.lb.compute_target(std::string("b"), ConsumerMode{}, reps, -150.0f, {}, {}, {-150.0f});
+  EXPECT_FLOAT_EQ(*loop.lb.get_last_intent("b"), reps.at("b").power - 150.0f);
+}
+
+TEST(StandbyReserve, SteerLogNamesASpillingStandby) {
+  ReserveLoop loop({{"a", venus()}, {"b", venus()}});
+  std::vector<std::string> lines;
+  loop.lb.set_steer_log_sink([&lines](const std::string &line) { lines.push_back(line); });
+  loop.run(1200.0f, 240);
+  ASSERT_EQ(loop.lb.spilling(), std::vector<std::string>{"b"});
+  std::string last_b;
+  for (const auto &line : lines)
+    if (line.rfind("CT002 steer b:", 0) == 0) last_b = line;
+  EXPECT_NE(last_b.find("rotation=overflow"), std::string::npos) << last_b;
+}
+
+TEST(StandbyReserve, EfficiencyModeOffNeverSpills) {
+  ReserveLoop loop({{"a", venus()}, {"b", venus()}}, /*min_efficient_power=*/0.0f);
+  for (float load : {600.0f, 1200.0f, 1700.0f, -900.0f, 300.0f}) {
+    loop.run(load, 120);
+    EXPECT_TRUE(loop.lb.spilling().empty());
+    EXPECT_EQ(loop.lb.spill_dir(), 0);
+  }
+}
+
+TEST(StandbyReserve, RemovalAndForcedRotationClearTheReserve) {
+  ReserveLoop loop({{"a", venus()}, {"b", venus()}, {"c", venus()}});
+  loop.run(1200.0f, 240);
+  ASSERT_FALSE(loop.lb.spilling().empty());
+  loop.lb.remove_consumer("b");
+  EXPECT_TRUE(loop.lb.spilling().empty());
+  EXPECT_EQ(loop.lb.spill_dir(), 0);
+
+  ReserveLoop again({{"a", venus()}, {"b", venus()}, {"c", venus()}});
+  again.run(1200.0f, 240);
+  ASSERT_FALSE(again.lb.spilling().empty());
+  again.lb.force_rotation({"a", "b", "c"});
+  EXPECT_TRUE(again.lb.spilling().empty());
 }

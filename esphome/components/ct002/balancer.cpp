@@ -688,8 +688,11 @@ std::optional<std::array<float, 3>> LoadBalancer::compute_probe_target_(
       support_reports.find(*consumer_id) == support_reports.end()) {
     return std::nullopt;
   }
+  // What the standby reserve delivers is not the probe's to split: the
+  // spillers hold it (or give it back first). See balancer.py.
   float desired_total = grid_total;
   for (const auto &r : reports) desired_total += r.second.power;
+  desired_total -= this->spill_delivery_(reports, grid_total);
   auto cand_it = reports.find(candidate_id);
   const float probe_actual = (cand_it != reports.end()) ? cand_it->second.power : 0.0f;
   const float probe_ceiling = std::max(std::fabs(desired_total), this->cfg_.probe_min_power);
@@ -863,6 +866,9 @@ void LoadBalancer::log_steer_(const std::optional<std::string> &consumer_id,
   const auto probe_set = this->probe_participants_();
   if (probe_set.find(*consumer_id) != probe_set.end()) {
     entry.rotation = "probing";
+  } else if (this->spilling_contains_(*consumer_id)) {
+    // Deprioritized, but carrying the standby reserve's overflow.
+    entry.rotation = "overflow";
   } else if (this->deprioritized_.find(*consumer_id) != this->deprioritized_.end()) {
     entry.rotation = "deprioritized";
   } else {
@@ -898,8 +904,9 @@ void LoadBalancer::log_steer_(const std::optional<std::string> &consumer_id,
 // would never be detected while clamped; #614's stall escape bounds that window.
 // Skipped for manual and probing consumers, and for a deprioritized one, whose
 // fade path still carries a transient non-zero command that would score as
-// "cannot follow" and lock maybe_force_swap_saturated_ out of promoting it back.
-// Mirrors balancer.py _track_saturation.
+// "cannot follow" and lock maybe_force_swap_saturated_ out of promoting it back,
+// unless it carries the standby reserve's overflow (an empty spiller has to be
+// passed over). Mirrors balancer.py _track_saturation.
 void LoadBalancer::track_saturation_(const std::string &consumer_id,
                                      BalancerConsumerState &state, ConsumerMode mode,
                                      ReportMap &reports) {
@@ -907,7 +914,8 @@ void LoadBalancer::track_saturation_(const std::string &consumer_id,
     return;
   const auto probe_set = this->probe_participants_();
   if (probe_set.find(consumer_id) != probe_set.end() ||
-      this->deprioritized_.find(consumer_id) != this->deprioritized_.end())
+      (this->deprioritized_.find(consumer_id) != this->deprioritized_.end() &&
+       !this->spilling_contains_(consumer_id)))
     return;
   const ConsumerReport &report = reports[consumer_id];
   this->saturation_.update(
@@ -932,7 +940,8 @@ void LoadBalancer::track_ceiling_(const std::string &consumer_id, BalancerConsum
     return;
   const auto probe_set = this->probe_participants_();
   if (probe_set.find(consumer_id) != probe_set.end() ||
-      this->deprioritized_.find(consumer_id) != this->deprioritized_.end())
+      (this->deprioritized_.find(consumer_id) != this->deprioritized_.end() &&
+       !this->spilling_contains_(consumer_id)))
     return;
   const double now = this->clock_();
   const float power = reports[consumer_id].power;
@@ -975,12 +984,23 @@ void LoadBalancer::track_ceiling_(const std::string &consumer_id, BalancerConsum
 
 template<typename Ids>
 std::unordered_map<std::string, float> LoadBalancer::ceilings_(const Ids &ids, int sign) const {
+  // While the standby reserve spills in *sign*'s direction, a battery ahead of
+  // it that is out of headroom for another reason (saturated, charge-blind) is
+  // capped where it stands, so the water-fill hands the rest to the standby.
+  const bool spill_caps = sign != 0 && sign == this->spill_dir_;
   std::unordered_map<std::string, float> out;
   for (const auto &id : ids) {
     const std::string &cid = key_of(id);
     auto it = this->consumers_.find(cid);
     const float ceiling = it != this->consumers_.end() ? it->second.ceiling(sign) : 0.0f;
     if (ceiling > 0.0f) out[cid] = ceiling;
+    if (spill_caps) {
+      auto cap = this->spill_caps_.find(cid);
+      if (cap != this->spill_caps_.end()) {
+        auto have = out.find(cid);
+        out[cid] = have != out.end() ? std::min(have->second, cap->second) : cap->second;
+      }
+    }
   }
   return out;
 }
@@ -1057,6 +1077,7 @@ std::array<float, 3> LoadBalancer::compute_target(
 void LoadBalancer::remove_consumer(const std::string &consumer_id) {
   this->consumers_.erase(consumer_id);
   this->deprioritized_.erase(consumer_id);
+  this->drop_spiller_(consumer_id);
   auto it = std::find(this->priority_.begin(), this->priority_.end(), consumer_id);
   if (it != this->priority_.end()) {
     this->priority_.erase(it);
@@ -1073,6 +1094,7 @@ void LoadBalancer::detach_from_auto_pool(const std::string &consumer_id) {
       std::remove(this->priority_.begin(), this->priority_.end(), consumer_id),
       this->priority_.end());
   this->consumers_.erase(consumer_id);
+  this->drop_spiller_(consumer_id);
   this->invalidate_efficiency_cache_();
   const auto probe_set = this->probe_participants_();
   if (probe_set.find(consumer_id) != probe_set.end())
@@ -1119,6 +1141,7 @@ void LoadBalancer::force_rotation(const std::unordered_set<std::string> &current
   this->priority_.push_back(first);
   this->last_rotation_ = this->clock_();
   this->probe_state_.reset();
+  this->clear_spill_();
   this->invalidate_efficiency_cache_();
   this->prune_pool_(current_pool);
   for (auto &kv : this->consumers_) kv.second.fade_weight = 1.0f;
@@ -1212,6 +1235,12 @@ float LoadBalancer::residual_share_(const std::optional<std::string> &consumer_i
                                     const ReportMap &reports, float control_grid,
                                     const std::unordered_map<std::string, float> &eff_part,
                                     const std::unordered_set<std::string> &charge_blind) {
+  // While the standby reserve spills, an error against its direction past
+  // SPILL_UNLOAD_DEADBAND_W is given back by the spillers first.
+  if (!this->spilling_.empty() && consumer_id &&
+      control_grid * static_cast<float>(this->spill_dir_) < -SPILL_UNLOAD_DEADBAND_W) {
+    return this->unload_lifo_(*consumer_id, reports, control_grid, eff_part);
+  }
   // Batteries already at their ceiling in the direction the grid asks for
   // cannot take a slice of it (issue #655).
   const auto pinned = this->pinned_(reports, eff_part, sign_of(control_grid));
@@ -1268,7 +1297,7 @@ int LoadBalancer::ceiling_retest_(const std::optional<std::string> &consumer_id,
   for (const auto &cid : ids) {
     const ConsumerReport &report = reports.at(cid);
     total += report.power;
-    weights[cid] = report.weight;
+    weights[cid] = this->share_weight_(reports, cid);
   }
   const int sign = sign_of(total);
   const auto fsign = static_cast<float>(sign);
@@ -1331,8 +1360,8 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
     return this->steer_to_zero_(consumer_id, reports, true);
   }
 
-  const auto blind = charge_blind_(reports, grid_total);
-  const std::unordered_set<std::string> &charge_blind = blind.first;
+  auto blind = charge_blind_(reports, grid_total);
+  std::unordered_set<std::string> &charge_blind = blind.first;
   const bool any_ac_chargeable = blind.second;
   // Share weight per consumer: a saturated battery (one that stopped following
   // its commands) earns a smaller slice, floored just above zero so it can
@@ -1359,6 +1388,18 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
       break;
     }
 
+  // The standby reserve is decided before the probe and fade returns below, so
+  // a handoff in flight neither misses an emptied head nor steers a spilling
+  // battery to 0 W.
+  this->update_spill_(reports, control_grid, faded_adjustments, charge_blind);
+  const bool self_spills = consumer_id && this->spilling_contains_(*consumer_id);
+  for (const auto &cid : this->spilling_) {
+    eff_part[cid] = 1.0f;
+    // Carrying a discharge overflow, a dip below zero asks it to discharge
+    // less, which a DC-only battery can do too.
+    if (this->spill_dir_ > 0) charge_blind.erase(cid);
+  }
+
   auto probe_target = this->compute_probe_target_(consumer_id, reports, grid_total, eff_part);
   if (probe_target.has_value()) return *probe_target;
 
@@ -1368,14 +1409,22 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
     return this->steer_to_zero_(consumer_id, reports, /*paced=*/true);
   }
 
+  if (self_spills) {
+    if (this->probe_state_.has_value())
+      return this->spill_target_(*consumer_id, reports, grid_total, /*hold=*/true);
+    if (any_fading)
+      return this->spill_target_(*consumer_id, reports, control_grid, /*hold=*/false);
+  }
+
   if (any_fading && consumer_id) {
     return this->fading_target_(*consumer_id, reports, grid_total, eff_part);
   }
 
   for (const auto &kv : faded_adjustments) {
-    if (eff_part.count(kv.first) && kv.second == 0.0f) eff_part[kv.first] = 0.0f;
+    if (eff_part.count(kv.first) && kv.second == 0.0f && !this->spilling_contains_(kv.first))
+      eff_part[kv.first] = 0.0f;
   }
-  if (consumer_id) {
+  if (consumer_id && !self_spills) {
     auto it = faded_adjustments.find(*consumer_id);
     if (it != faded_adjustments.end() && it->second == 0.0f)
       return this->steer_to_zero_(consumer_id, reports, /*paced=*/true);
@@ -1391,6 +1440,9 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
     auto it = reports.find(*consumer_id);
     if (it != reports.end()) reported = it->second.power;
   }
+  // A spiller winds down to 0 W, never across into the other direction.
+  if (self_spills && (reported + residual) * static_cast<float>(this->spill_dir_) < 0.0f)
+    residual = -reported;
   return this->emit_(consumer_id, NetOutputW(reported + residual), reported, reports,
                      &eff_part, /*pace=*/true);
 }
@@ -1500,10 +1552,263 @@ std::array<float, 3> LoadBalancer::fading_target_(
                      /*pace=*/true);
 }
 
+// -------------------------------------------------------------------------
+// Standby reserve (efficiency mode). Mirrors balancer.py.
+// -------------------------------------------------------------------------
+
+bool LoadBalancer::spilling_contains_(const std::string &consumer_id) const {
+  return std::find(this->spilling_.begin(), this->spilling_.end(), consumer_id) !=
+         this->spilling_.end();
+}
+
+// *consumer_id*'s Distribution Weight as the share math sees it: scaled down
+// for a spilling standby (SPILL_WEIGHT per rank) so the batteries ahead of it
+// keep their full slice. A lookup in a per-tick map rather than a rewritten
+// copy of the reports.
+float LoadBalancer::share_weight_(const ReportMap &reports,
+                                  const std::string &consumer_id) const {
+  auto it = reports.find(consumer_id);
+  const float weight = it != reports.end() ? it->second.weight : 1.0f;
+  auto scale = this->spill_scale_.find(consumer_id);
+  return scale == this->spill_scale_.end() ? weight : weight * scale->second;
+}
+
+// The cap *consumer_id* is stuck at in direction *sign*, or absent when it has
+// headroom: parked (weight 0), unable to charge from AC under a surplus,
+// saturated (full / empty), or within *margin* of its learned ceiling.
+std::optional<float> LoadBalancer::no_headroom_(
+    const std::string &consumer_id, const ReportMap &reports, int sign,
+    const std::unordered_set<std::string> &charge_blind, float margin) const {
+  auto rit = reports.find(consumer_id);
+  const ConsumerReport fallback{};
+  const ConsumerReport &report = rit != reports.end() ? rit->second : fallback;
+  if (report.weight <= 0.0f) return 0.0f;
+  if (sign < 0 && (charge_blind.count(consumer_id) || !is_ac_chargeable(report.device_type)))
+    return SPILL_MIN_CAP_W;
+  auto sit = this->consumers_.find(consumer_id);
+  const double threshold = this->cfg_.efficiency_saturation_threshold;
+  if (sit != this->consumers_.end() && threshold > 0.0 &&
+      sit->second.saturation_score >= threshold)
+    return std::max(std::fabs(report.power), SPILL_MIN_CAP_W);
+  const float ceiling = sit != this->consumers_.end() ? sit->second.ceiling(sign) : 0.0f;
+  if (ceiling > 0.0f && report.power * static_cast<float>(sign) >= ceiling - margin)
+    return ceiling;
+  return std::nullopt;
+}
+
+void LoadBalancer::clear_spill_() {
+  this->spilling_.clear();
+  this->spill_dir_ = 0;
+  this->spill_caps_.clear();
+  this->spill_scale_.clear();
+  this->spill_free_since_.reset();
+}
+
+// Take a departing consumer out of the standby reserve; the spillers behind it
+// keep their rank order, so their weight scales are re-derived.
+void LoadBalancer::drop_spiller_(const std::string &consumer_id) {
+  this->spill_caps_.erase(consumer_id);
+  if (!this->spilling_contains_(consumer_id)) return;
+  this->spilling_.erase(
+      std::remove(this->spilling_.begin(), this->spilling_.end(), consumer_id),
+      this->spilling_.end());
+  this->spill_scale_.clear();
+  float scale = 1.0f;
+  for (const auto &cid : this->spilling_) {
+    scale *= SPILL_WEIGHT;
+    this->spill_scale_[cid] = scale;
+  }
+  if (this->spilling_.empty()) this->clear_spill_();
+}
+
+// Decide which standby batteries carry the overflow. In rotation order, a
+// standby (efficiency mode, faded fully out, weight above 0) joins only while
+// every battery ahead of it, earlier spillers included, is out of headroom in
+// the demand's direction and the grid still shows demand left over for it;
+// DC-only standbys are passed over under a surplus. Joining takes the ceiling
+// margin, staying twice that, and a spiller still carrying power is held for
+// SPILL_RELEASE_SECONDS after the batteries ahead regain headroom. Re-decided
+// on every call, so a meter repeating its reading cannot freeze the decision.
+// balancer.py also logs an INFO line when a standby joins; the firmware has no
+// counterpart, and the steer line's rotation=overflow carries the same fact.
+void LoadBalancer::update_spill_(const ReportMap &reports, float control_grid,
+                                 const std::unordered_map<std::string, float> &faded,
+                                 const std::unordered_set<std::string> &charge_blind) {
+  if (this->cfg_.min_efficient_power <= 0.0f || reports.size() < 2) {
+    if (!this->spilling_.empty() || this->spill_free_since_.has_value()) this->clear_spill_();
+    return;
+  }
+  std::vector<std::string> standby;
+  for (const auto &cid : this->priority_) {
+    auto rit = reports.find(cid);
+    auto fit = faded.find(cid);
+    if (rit != reports.end() && fit != faded.end() && fit->second == 0.0f &&
+        rit->second.weight > 0.0f)
+      standby.push_back(cid);
+  }
+  int sign = 0;
+  if (!standby.empty()) {
+    float demand = control_grid;
+    for (const auto &r : reports) demand += r.second.power;
+    if (std::fabs(demand) >= SPILL_MIN_DEMAND_W) sign = sign_of(demand);
+  }
+  const auto fsign = static_cast<float>(sign);
+  std::vector<std::string> spill;
+  std::unordered_map<std::string, float> caps;
+  bool held = false;
+  if (sign != 0) {
+    const double now = this->clock_();
+    std::vector<std::string> ahead;
+    for (const auto &r : reports) {
+      if (std::find(standby.begin(), standby.end(), r.first) != standby.end()) continue;
+      auto fit = faded.find(r.first);
+      if ((fit != faded.end() ? fit->second : 1.0f) > 0.0f) ahead.push_back(r.first);
+    }
+    for (const auto &cid : standby) {
+      const ConsumerReport &report = reports.at(cid);
+      // Cannot take a surplus: the next standby in line can.
+      if (sign < 0 && (charge_blind.count(cid) || !is_ac_chargeable(report.device_type)))
+        continue;
+      const bool staying = this->spill_dir_ == sign && this->spilling_contains_(cid);
+      const float margin = staying ? 2.0f * CEILING_AT_MARGIN_W : CEILING_AT_MARGIN_W;
+      bool blocked = true;
+      for (const auto &other : ahead) {
+        const auto cap = this->no_headroom_(other, reports, sign, charge_blind, margin);
+        if (!cap.has_value()) {
+          blocked = false;
+        } else {
+          caps[other] = *cap;
+        }
+      }
+      if (staying && !blocked) {
+        if (report.power * fsign > SPILL_HOLD_W) {
+          held = true;
+          if (!this->spill_free_since_.has_value()) this->spill_free_since_ = now;
+          blocked = now - *this->spill_free_since_ < SPILL_RELEASE_SECONDS;
+        }
+      } else if (!staying && control_grid * fsign <= 0.0f) {
+        // Nothing left over for it to take.
+        blocked = false;
+      }
+      if (!blocked) break;
+      spill.push_back(cid);
+      ahead.push_back(cid);
+    }
+  }
+  if (!held) this->spill_free_since_.reset();
+  for (const auto &cid : this->spilling_) {
+    if (std::find(spill.begin(), spill.end(), cid) == spill.end()) {
+      auto it = this->consumers_.find(cid);
+      if (it != this->consumers_.end()) this->saturation_.clear(it->second);
+    }
+  }
+  for (const auto &cid : spill) {
+    if (!this->spilling_contains_(cid))
+      this->set_consumer_grace_(cid, this->clock_() + SPILL_JOIN_GRACE_SECONDS);
+  }
+  this->spilling_ = std::move(spill);
+  this->spill_dir_ = this->spilling_.empty() ? 0 : sign;
+  if (this->spilling_.empty()) caps.clear();
+  this->spill_caps_ = std::move(caps);
+  this->spill_scale_.clear();
+  float scale = 1.0f;
+  for (const auto &cid : this->spilling_) {
+    scale *= SPILL_WEIGHT;
+    this->spill_scale_[cid] = scale;
+  }
+}
+
+// Each spiller's part of an *error* against the spill direction: last in,
+// first out, each down to 0 W and never past it. Empty unless *error* opposes
+// the spill direction.
+std::unordered_map<std::string, float> LoadBalancer::spill_takes_(const ReportMap &reports,
+                                                                  float error) const {
+  std::unordered_map<std::string, float> out;
+  const auto d = static_cast<float>(this->spill_dir_);
+  if (this->spill_dir_ == 0 || error * d >= 0.0f) return out;
+  float remaining = error;
+  for (auto it = this->spilling_.rbegin(); it != this->spilling_.rend(); ++it) {
+    auto rit = reports.find(*it);
+    const float power = rit != reports.end() ? rit->second.power : 0.0f;
+    const float carried = std::max(0.0f, power * d);
+    const float take = std::max(remaining * d, -carried) * d;
+    out[*it] = take;
+    remaining -= take;
+  }
+  return out;
+}
+
+// What the spillers deliver after this poll during a probe: they hold their
+// output, giving back first an error against the spill direction past
+// SPILL_UNLOAD_DEADBAND_W.
+float LoadBalancer::spill_delivery_(const ReportMap &reports, float grid_total) const {
+  if (this->spilling_.empty()) return 0.0f;
+  float total = 0.0f;
+  for (const auto &cid : this->spilling_) {
+    auto rit = reports.find(cid);
+    if (rit != reports.end()) total += rit->second.power;
+  }
+  if (grid_total * static_cast<float>(this->spill_dir_) < -SPILL_UNLOAD_DEADBAND_W) {
+    for (const auto &kv : this->spill_takes_(reports, grid_total)) total += kv.second;
+  }
+  return total;
+}
+
+// Steer a spiller while a probe or a fade owns the rest of the pool. During a
+// probe (*hold*) it keeps its output, giving back only an error against the
+// spill direction past the deadband; during a fade it is the integrator: the
+// last spiller takes an error in its direction, all give back last in, first
+// out. Never past 0 W.
+std::array<float, 3> LoadBalancer::spill_target_(const std::string &consumer_id,
+                                                 const ReportMap &reports, float error,
+                                                 bool hold) {
+  const auto d = static_cast<float>(this->spill_dir_);
+  auto rit = reports.find(consumer_id);
+  const float reported = rit != reports.end() ? rit->second.power : 0.0f;
+  float take = 0.0f;
+  if (error * d < 0.0f) {
+    if (!hold || error * d < -SPILL_UNLOAD_DEADBAND_W) {
+      const auto takes = this->spill_takes_(reports, error);
+      auto it = takes.find(consumer_id);
+      if (it != takes.end()) take = it->second;
+    }
+  } else if (!hold && !this->spilling_.empty() && consumer_id == this->spilling_.back()) {
+    take = error;
+  }
+  float desired = reported + take;
+  if (desired * d < 0.0f) desired = 0.0f;
+  return this->emit_(consumer_id, NetOutputW(desired), reported, reports,
+                     /*weights=*/nullptr, /*pace=*/desired != reported);
+}
+
+// Last in, first out while standbys spill and the pool asks for less: the
+// spillers give back first, only what is left reaches the batteries ahead.
+// Tracking only, no balance term.
+float LoadBalancer::unload_lifo_(const std::string &consumer_id, const ReportMap &reports,
+                                 float control_grid,
+                                 const std::unordered_map<std::string, float> &eff_part) {
+  const auto takes = this->spill_takes_(reports, control_grid);
+  float share = 0.0f;
+  auto mine = takes.find(consumer_id);
+  if (mine != takes.end()) {
+    share = mine->second;
+  } else {
+    float remaining = control_grid;
+    for (const auto &kv : takes) remaining -= kv.second;
+    std::unordered_map<std::string, float> ahead;
+    for (const auto &kv : eff_part) {
+      if (!takes.count(kv.first)) ahead.insert(kv);
+    }
+    share = this->fair_share_(consumer_id, reports, remaining, ahead, {});
+  }
+  this->diag_fair_share_ = share;
+  return share;
+}
+
 float LoadBalancer::fair_share_(const std::optional<std::string> &consumer_id,
                                 const ReportMap &reports, float control_grid,
                                 const std::unordered_map<std::string, float> &eff_part,
-                                const std::unordered_set<std::string> &pinned) {
+                                const std::unordered_set<std::string> &pinned) const {
   // Fold the per-battery user weight into the effectiveness map so the
   // fair-share split honours the configured ratio. `eff_part` stays the pure
   // health/saturation map (used for participation/probing); the weighted
@@ -1511,10 +1816,7 @@ float LoadBalancer::fair_share_(const std::optional<std::string> &consumer_id,
   // weights (all 1.0) share_part == eff_part and the math is unchanged.
   std::unordered_map<std::string, float> share_part;
   for (const auto &kv : eff_part) {
-    float w = 1.0f;
-    auto rit = reports.find(kv.first);
-    if (rit != reports.end()) w = rit->second.weight;
-    share_part[kv.first] = kv.second * w;
+    share_part[kv.first] = kv.second * this->share_weight_(reports, kv.first);
   }
   float total_effective = 0.0f;
   for (const auto &kv : share_part) total_effective += kv.second;
@@ -1835,7 +2137,7 @@ bool LoadBalancer::concentration_pool_balanced_(const ReportMap &reports,
   for (const auto *cid : conc_ids) {
     const auto &rep = reports.at(*cid);
     actual_total += rep.power;
-    weights[*cid] = rep.weight;
+    weights[*cid] = this->share_weight_(reports, *cid);
   }
   const auto ceilings = this->ceilings_(conc_ids, sign_of(actual_total));
   for (const auto *cid : conc_ids) {
@@ -1870,10 +2172,7 @@ float LoadBalancer::balance_correction_(const std::string &consumer_id,
   // state. Participation is decided by eff_part above, so a healthy battery with
   // a small weight is not dropped. Neutral weights reduce to the plain average.
   std::unordered_map<std::string, float> weights;
-  for (const auto &cid : participating) {
-    auto it = reports.find(cid);
-    weights[cid] = (it != reports.end()) ? it->second.weight : 1.0f;
-  }
+  for (const auto &cid : participating) weights[cid] = this->share_weight_(reports, cid);
   // A battery's share stops at its learned ceiling and the rest goes to the
   // others, so an unlimited battery is not pulled down toward limited ones
   // (issue #655).
@@ -2031,7 +2330,7 @@ std::unordered_map<std::string, float> LoadBalancer::compute_efficiency_depriori
   }
 
   if (!probe_active && !probe_resolved &&
-      this->maybe_force_swap_saturated_(this->priority_, slots, now)) {
+      this->maybe_force_swap_saturated_(this->priority_, slots, now, reports, grid_total)) {
     deprioritized.clear();
     for (size_t i = slots; i < this->priority_.size(); ++i)
       deprioritized.insert(this->priority_[i]);
@@ -2160,8 +2459,15 @@ size_t LoadBalancer::active_slots_(float abs_target, size_t n, bool was_limiting
   return slots;
 }
 
+// A battery with a 0 efficiency window weight never leads, so it is not a
+// candidate while the saturated one could: sync_pool_ would sink it straight
+// back, returning the saturated battery to the head under a fresh grace that
+// hides it from the standby reserve, which covers it instead. Nor, under a
+// surplus, is a battery that cannot charge from AC. Mirrors balancer.py
+// _maybe_force_swap_saturated.
 bool LoadBalancer::maybe_force_swap_saturated_(std::vector<std::string> &priority,
-                                               size_t slots, double now) {
+                                               size_t slots, double now,
+                                               const ReportMap &reports, float grid_total) {
   const auto &cfg = this->cfg_;
   if (cfg.efficiency_saturation_threshold <= 0.0f || slots >= priority.size()) return false;
   const double threshold = cfg.efficiency_saturation_threshold;
@@ -2174,8 +2480,19 @@ bool LoadBalancer::maybe_force_swap_saturated_(std::vector<std::string> &priorit
     }
   }
   if (!saturated_idx) return false;
+  const bool saturated_leads =
+      efficiency_window_weight_of(reports, priority[*saturated_idx]) > 0.0f;
+  float demand = grid_total;
+  for (const auto &r : reports) demand += r.second.power;
+  const bool surplus = demand < 0.0f;
   std::optional<size_t> healthy_idx;
   for (size_t i = slots; i < priority.size(); ++i) {
+    if (saturated_leads && efficiency_window_weight_of(reports, priority[i]) <= 0.0f) continue;
+    if (surplus) {
+      auto rit = reports.find(priority[i]);
+      if (!is_ac_chargeable(rit != reports.end() ? rit->second.device_type : std::string()))
+        continue;
+    }
     auto it = this->consumers_.find(priority[i]);
     if (it == this->consumers_.end() || it->second.saturation_score < threshold) {
       healthy_idx = i;

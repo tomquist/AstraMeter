@@ -291,7 +291,8 @@ class Consumer:
     distribution_weight: float = 1.0
     # Per-battery weight ([0, 1], neutral 1.0) scaling how much of the efficiency
     # rotation window this battery participates in: 1.0 = full participation,
-    # 0.0 = skipped for efficiency (parked while limiting), intermediate =
+    # 0.0 = a backup (never leads, covers what the batteries ahead cannot,
+    # see the balancer's standby reserve), intermediate =
     # proportionally less active time / wear while low demand runs one battery
     # at a time (above one active slot every turn is a full window).  Tuned live
     # via the MQTT "Efficiency Window Weight" entity.
@@ -648,9 +649,9 @@ class CT002:
         """Set the efficiency-rotation window weight for a battery.
 
         Must be finite and within ``0 <= weight <= 1``.  1.0 is neutral (full
-        participation in efficiency rotation); 0.0 skips the battery for
-        efficiency (parked while limiting, as long as enough non-zero-weight
-        batteries can fill the active slots); intermediate values give it
+        participation in efficiency rotation); 0.0 makes it a backup that never
+        leads, idles while the batteries ahead can cover the demand and covers
+        only what they cannot; intermediate values give it
         proportionally less active time while low demand runs one battery at a
         time; above one active slot every turn is a full window.
         """

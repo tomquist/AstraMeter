@@ -18,6 +18,7 @@ from __future__ import annotations
 import random
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -346,13 +347,13 @@ def _scenario_efficiency_lifecycle() -> list[str]:
 
 
 def _scenario_efficiency_window_weight() -> list[str]:
-    """Per-battery efficiency-window weight: a parked unit (0) stays
+    """Per-battery efficiency-window weight: a backup unit (0) stays
     deprioritized while limiting, a half-weight head rotates out at half the
     interval, unequal non-zero weights hand each unit a proportional turn, and a
     fresh pool fills heaviest-first even when that contradicts id order. Both
     stacks must agree poll-by-poll on the resulting targets."""
     lines = [_CFG_EFFICIENCY, "clock 5000"]
-    # "y" is parked for efficiency (weight 0); under low demand it must stay
+    # "y" is the backup (weight 0); under low demand it must stay
     # deprioritized while "x" carries the load.
     parked = [
         _report("x", "A", 0, eff_weight=1.0),
@@ -646,6 +647,221 @@ def test_parity_efficiency_window_weight(harness: Path) -> None:
     _compare(
         "efficiency_window_weight", lines, _run_cpp(harness, lines), _run_py(lines)
     )
+
+
+# ---------------------------------------------------------------------------
+# Closed-loop streams: the standby reserve (efficiency mode).
+#
+# The reserve only engages once a battery ahead is out of headroom — at a
+# learned ceiling, saturated, or DC-only under a surplus — which takes reports
+# that follow the balancer's own commands over many polls.  These streams are
+# recorded by steering a minimal plant with the Python driver, then replayed
+# through both stacks, so the comparison runs over realistic trajectories.
+# ---------------------------------------------------------------------------
+
+
+class _Plant:
+    """Adds each reading to its output, within its limits, in whole watts."""
+
+    def __init__(
+        self,
+        dev: str = "VNSE3",
+        *,
+        discharge: float = 800.0,
+        charge: float = 2500.0,
+        window: float = 1.0,
+        phase: str = "A",
+    ) -> None:
+        self.dev = dev
+        self.discharge = discharge
+        self.charge = 0.0 if dev.startswith(("HMA", "HMJ", "HMK")) else charge
+        self.window = window
+        self.phase = phase
+        self.power = 0
+        self.full = False
+        self.empty = False
+
+    def step(self, reading: float) -> None:
+        hi = 0.0 if self.empty else self.discharge
+        lo = 0.0 if self.full else -self.charge
+        self.power = round(max(lo, min(hi, self.power + reading)))
+
+
+def _closed_loop_stream(
+    cfg: str,
+    plants: dict[str, _Plant],
+    schedule: list[tuple[float, int]],
+    *,
+    meter_every: int = 1,
+    events: dict[int, Callable[[dict[str, _Plant]], None]] | None = None,
+) -> tuple[list[str], int]:
+    """Record a closed-loop stream; also return how many polls spilled.
+
+    The meter carries a few watts of noise, as a real one does.  A noiseless
+    meter settles the loop onto exact cancellations, where the two stacks'
+    float and double arithmetic leave residues of opposite sign (around
+    1e-8 W) that the deadband concentration and the oscillation damper then
+    branch on — a precision artefact of the comparison, not a divergence of
+    the logic.
+    """
+    driver = PyDriver()
+    noise = random.Random(len(plants) * 1000 + len(schedule))
+    lines = [cfg, "clock 10000"]
+    for line in lines:
+        driver.feed(line)
+    tick = 0
+    spilled = 0
+    grid = 0.0
+    for load, n in schedule:
+        for _ in range(n):
+            if events and tick in events:
+                events[tick](plants)
+            # A slow meter repeats its reading, and with it its sample id.
+            if tick % meter_every == 0:
+                grid = round(
+                    load
+                    - sum(b.power for b in plants.values())
+                    + noise.choice((-6.3, -3.7, -1.4, 1.6, 3.4, 5.8))
+                )
+            pool = [
+                _report(cid, b.phase, b.power, b.dev, eff_weight=b.window)
+                for cid, b in plants.items()
+            ]
+            readings = {}
+            for cid in plants:
+                line = _target(cid, pool, grid=grid)
+                lines.append(line)
+                driver.feed(line)
+                readings[cid] = sum(float(v) for v in driver.out[-1].split())
+                assert driver.balancer is not None
+                spilled += bool(driver.balancer._spilling)
+            for cid in plants:
+                lines += [f"last {cid}", f"intent {cid}", f"sat {cid}"]
+            for cid, b in plants.items():
+                b.step(readings[cid])
+            lines.append("advance 1")
+            driver.feed("advance 1")
+            tick += 1
+    return lines, spilled
+
+
+# Efficiency mode at a floor no single battery reaches, with no timed rotation:
+# one head, the rest standby.  Saturation detection on.
+_CFG_RESERVE = "cfg 1 2500 86400 0.4 0.15 20 90 1"
+
+
+def _set(cid: str, **attrs: bool) -> Callable[[dict[str, _Plant]], None]:
+    def apply(plants: dict[str, _Plant]) -> None:
+        for name, value in attrs.items():
+            setattr(plants[cid], name, value)
+
+    return apply
+
+
+def _reserve_streams() -> dict[str, tuple[list[str], int]]:
+    return {
+        # The head's 800 W ceiling: overflow, last-in-first-out give-back,
+        # overflow again, then a surplus.
+        "overflow_lifo": _closed_loop_stream(
+            _CFG_RESERVE,
+            {"a": _Plant(), "b": _Plant()},
+            [(600, 60), (1200, 150), (700, 100), (1200, 60), (-900, 60)],
+        ),
+        # A 0 % window backup behind a head that empties, then fills.
+        "backup_takes_over": _closed_loop_stream(
+            _CFG_RESERVE,
+            {"a": _Plant(), "b": _Plant(window=0.0)},
+            [(500, 180), (-1000, 60), (-1000, 120)],
+            events={60: _set("a", empty=True), 180: _set("a", empty=False, full=True)},
+        ),
+        # A DC-only standby first in line under a surplus is passed over.
+        "dc_standby_surplus": _closed_loop_stream(
+            _CFG_RESERVE,
+            {"a": _Plant(), "b": _Plant("HMJ-2"), "c": _Plant()},
+            [(-800, 180), (1500, 120)],
+            events={60: _set("a", full=True)},
+        ),
+        # Rotation every two minutes while the head's ceiling binds: probes and
+        # fades run with a spilling standby.
+        "handoffs": _closed_loop_stream(
+            "cfg 1 2500 120 0.4 0.15 20 90 1",
+            {"a": _Plant(), "b": _Plant(), "c": _Plant()},
+            [(1200, 420)],
+        ),
+        # A meter repeating its reading for ten polls while the head empties.
+        "repeating_meter": _closed_loop_stream(
+            _CFG_RESERVE,
+            {"a": _Plant(), "b": _Plant(window=0.0)},
+            [(400, 240)],
+            meter_every=10,
+            events={80: _set("a", empty=True)},
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "overflow_lifo",
+        "backup_takes_over",
+        "dc_standby_surplus",
+        "handoffs",
+        "repeating_meter",
+    ],
+)
+def test_parity_standby_reserve(harness: Path, name: str) -> None:
+    lines, spilled = _reserve_streams()[name]
+    # The stream has to exercise what it is named for.
+    assert spilled > 0, f"{name}: the standby reserve never engaged"
+    _compare(f"reserve[{name}]", lines, _run_cpp(harness, lines), _run_py(lines))
+
+
+def _random_reserve_stream(seed: int) -> tuple[list[str], int]:
+    """A closed-loop stream over a random fleet, floor, schedule and faults.
+
+    Mixed device types (a DC-only B2500 among them), discharge limits that a
+    ceiling is learned at, efficiency window weights including 0, a random
+    load / surplus schedule, a battery emptying or filling part-way, and
+    sometimes a slow meter.
+    """
+    rng = random.Random(10_000 + seed)
+    min_eff = rng.choice([400, 1200, 2500])
+    rot = rng.choice([120, 900, 86400])
+    cfg = f"cfg 1 {min_eff} {rot} 0.4 0.15 20 90 1"
+    plants: dict[str, _Plant] = {}
+    for cid in ("a", "b", "c")[: rng.randint(2, 3)]:
+        plants[cid] = _Plant(
+            rng.choice(["VNSE3", "VNSE3", "HMG-50", "HMJ-2"]),
+            discharge=rng.choice([600.0, 800.0, 1200.0]),
+            charge=rng.choice([1200.0, 2500.0]),
+            window=rng.choice([1.0, 1.0, 0.5, 0.0]),
+        )
+    schedule = [
+        (rng.choice([-1500, -700, 300, 700, 1100, 1600, 2200]), rng.randint(30, 90))
+        for _ in range(rng.randint(3, 5))
+    ]
+    fault_at = rng.randint(20, 120)
+    fault_cid = rng.choice(list(plants))
+    fault = rng.choice(["empty", "full"])
+    return _closed_loop_stream(
+        cfg,
+        plants,
+        schedule,
+        meter_every=rng.choice([1, 1, 3]),
+        events={fault_at: _set(fault_cid, **{fault: True})},
+    )
+
+
+@pytest.mark.parametrize("seed", range(16))
+def test_parity_fuzz_standby_reserve(harness: Path, seed: int) -> None:
+    lines, _ = _random_reserve_stream(seed)
+    _compare(f"reserve_fuzz[{seed}]", lines, _run_cpp(harness, lines), _run_py(lines))
+
+
+def test_reserve_fuzz_engages_the_reserve() -> None:
+    """The randomized reserve streams are not all idle ones."""
+    engaged = sum(_random_reserve_stream(seed)[1] > 0 for seed in range(16))
+    assert engaged >= 8
 
 
 # ---------------------------------------------------------------------------

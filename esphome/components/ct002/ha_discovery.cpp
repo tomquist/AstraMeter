@@ -299,8 +299,9 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
 
     // Efficiency window weight number — how much of the efficiency rotation
     // window this battery participates in, as a percentage. 100 % neutral (full
-    // participation); 0 % skips the battery for efficiency (parked while
-    // limiting). Surfaced as a percentage; the internal value is a 0-1 fraction.
+    // participation); 0 % makes it a backup that never leads but covers what
+    // the batteries ahead cannot (the standby reserve). Surfaced as a
+    // percentage; the internal value is a 0-1 fraction.
     // Only meaningful when efficiency rotation is enabled (min_efficient_power >
     // 0); without it every battery stays active, so don't surface the entity
     // (mirrors discovery.py).
