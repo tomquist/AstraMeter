@@ -10,6 +10,7 @@ from typing import Any, Literal, NamedTuple, NewType, get_args
 
 from astrameter.config.logger import logger
 
+from .controls import BATTERY_POWER_MAX
 from .protocol import parse_int
 
 # ---------------------------------------------------------------------------
@@ -51,7 +52,8 @@ class ConsumerReport:
     """One consumer's latest poll, as the balancer sees it.
 
     Every field is normalized on construction, so the control path reads plain
-    numbers and never re-parses or re-defaults. Only ``min_dc_output`` is
+    numbers and never re-parses or re-defaults. Only the per-device minimums
+    (``min_dc_output``, ``min_charge_power``, ``min_discharge_power``) are
     nullable, where ``None`` means "no override".
     """
 
@@ -77,8 +79,17 @@ class ConsumerReport:
     min_dc_output: float | None = None
     """Per-device MIN_DC_OUTPUT override in watts; ``None`` uses the global rule."""
 
+    min_charge_power: float | None = None
+    """Per-device MIN_CHARGE_POWER override in watts; ``None`` uses the global one."""
+
+    min_discharge_power: float | None = None
+    """Per-device MIN_DISCHARGE_POWER override in watts; ``None`` uses the global
+    one."""
+
     def __post_init__(self) -> None:
         floor = self.min_dc_output
+        min_charge = self.min_charge_power
+        min_discharge = self.min_discharge_power
         for field, value in (
             ("power", parse_int(self.power)),
             ("phase", (self.phase or "A").upper()),
@@ -89,6 +100,14 @@ class ConsumerReport:
                 max(0.0, min(1.0, float(self.efficiency_window_weight))),
             ),
             ("min_dc_output", None if floor is None else max(0.0, float(floor))),
+            (
+                "min_charge_power",
+                None if min_charge is None else max(0.0, float(min_charge)),
+            ),
+            (
+                "min_discharge_power",
+                None if min_discharge is None else max(0.0, float(min_discharge)),
+            ),
         ):
             object.__setattr__(self, field, value)
 
@@ -472,6 +491,13 @@ class BalancerConfig:
     # family, ``_needs_dc_output_floor``) at so its inverter never sleeps at
     # 0 W (issue #425).  0 disables.
     min_dc_output: float = 0
+    # Minimum charge / discharge (W) a battery runs at (issue #721): a battery
+    # whose share of the demand falls below it idles at 0 W instead and the
+    # others, or the grid, cover it, since an inverter is least efficient at a
+    # few watts (see ``_below_min_power``).  A battery's own setting
+    # (``ConsumerReport``) overrides these.  ``0`` disables.
+    min_charge_power: float = 0
+    min_discharge_power: float = 0
     # Ramp pacing (issue #458): each consumer's sent reading is clamped to a cap
     # that starts at ``pace_base_step`` (the firmware's first-step gain), grows
     # x2 toward ``pace_max_step`` only while the battery is observed tracking,
@@ -527,6 +553,8 @@ class BalancerConfig:
         _clamp("efficiency_saturation_threshold", 0.0, 1.0)
         _clamp("efficiency_demand_alpha", 0.01, 1.0)
         _clamp("min_dc_output", 0, float("inf"))
+        _clamp("min_charge_power", 0, BATTERY_POWER_MAX)
+        _clamp("min_discharge_power", 0, BATTERY_POWER_MAX)
         _clamp("pace_base_step", 0, float("inf"))
         _clamp("pace_max_step", self.pace_base_step, float("inf"))
         _clamp("osc_damp_max", 0.0, 1.0)
@@ -627,6 +655,9 @@ class BalancerConsumerState:
     ceiling_run_anchor: float = 0.0
     ceiling_run_since: float = 0.0
     ceiling_run_polls: int = 0
+    # Idling at 0 W because its share fell below its minimum charge / discharge
+    # power (see ``_below_min_power``); it resumes only past the hysteresis.
+    min_power_idle: bool = False
 
     def ceiling(self, sign: int) -> float:
         """Learned ceiling in direction *sign* (+ discharge), 0.0 if none."""
@@ -660,6 +691,7 @@ class BalancerConsumerSnapshot:
     pace_sign: int
     osc_score: float
     osc_last_sign: int
+    min_power_idle: bool
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -2136,6 +2168,7 @@ class LoadBalancer:
             pace_sign=state.pace_sign,
             osc_score=state.osc_score,
             osc_last_sign=state.osc_last_sign,
+            min_power_idle=state.min_power_idle,
         )
 
     def status_snapshot(self) -> BalancerSnapshot:
@@ -2309,6 +2342,93 @@ class LoadBalancer:
             single_phase=report.phase,
         )
 
+    def _min_power(self, report: ConsumerReport, sign: int) -> float:
+        """The least *report*'s battery may run at in direction *sign* (W).
+
+        Its own MIN_CHARGE_POWER / MIN_DISCHARGE_POWER override wins over the
+        global one; 0 means no minimum.
+        """
+        if sign > 0:
+            own, default = report.min_discharge_power, self._cfg.min_discharge_power
+        elif sign < 0:
+            own, default = report.min_charge_power, self._cfg.min_charge_power
+        else:
+            return 0.0
+        return default if own is None else own
+
+    def _below_min_power(
+        self,
+        reports: Reports,
+        demand_grid: float,
+        eff_part: Mapping[str, float],
+        exempt: Collection[str],
+    ) -> set[str]:
+        """The batteries that idle because their share is below their minimum.
+
+        The demand is what the batteries taking a share deliver plus the
+        predicted grid: the house's net load, net of anything else (solar, a
+        manual or paused battery, one winding down for another reason).  It is
+        split the way the share math splits it, and while any battery's share
+        falls below its minimum in the demand's direction, the one furthest
+        below idles and the rest are split again — so two batteries that would
+        each run at 40 W become one at 80 W rather than none, and the pool
+        idles only when even one battery alone would run below its minimum.
+        An idle battery resumes only once its share reaches
+        EFFICIENCY_HYSTERESIS_FACTOR times its minimum, so a demand hovering
+        at the minimum does not toggle it.  Updates each battery's
+        ``min_power_idle``; *exempt* batteries (the standby reserve spilling)
+        and those taking no share are left as they are.
+        """
+        ids = [
+            cid
+            for cid in reports
+            if eff_part.get(cid, 0.0) > 0.0
+            and reports[cid].weight > 0.0
+            and cid not in exempt
+        ]
+        demand = sum(reports[cid].power for cid in ids) + demand_grid
+        sign = _sign(demand)
+
+        def was_idle(cid: str) -> bool:
+            state = self._consumers.get(cid)
+            return state is not None and state.min_power_idle
+
+        if sign == 0:
+            # No direction to judge a minimum in: nobody changes state.
+            return {cid for cid in ids if was_idle(cid)}
+        weights = {cid: eff_part[cid] * self._share_weight(reports, cid) for cid in ids}
+        ceilings = self._ceilings(ids, sign)
+
+        def threshold(cid: str) -> float:
+            minimum = self._min_power(reports[cid], sign)
+            if was_idle(cid):
+                return minimum * EFFICIENCY_HYSTERESIS_FACTOR
+            return minimum
+
+        running = list(ids)
+        while running:
+            short = []
+            for cid in running:
+                floor = threshold(cid)
+                if floor <= 0.0:
+                    continue
+                share = capped_weighted_share(demand, weights, running, ceilings, cid)
+                if share * sign < floor:
+                    short.append((share * sign / floor, cid))
+            if not short:
+                break
+            running.remove(min(short)[1])
+        idle = set(ids) - set(running)
+        for cid in ids:
+            if was_idle(cid) != (cid in idle):
+                self._get_consumer(cid).min_power_idle = cid in idle
+                logger.info(
+                    "%s %s its minimum power",
+                    cid,
+                    "idles: its share is below" if cid in idle else "resumes above",
+                )
+        return idle
+
     def _steer_to_zero(
         self, consumer_id: str | None, reports: Reports, *, paced: bool = False
     ) -> list[float]:
@@ -2441,6 +2561,10 @@ class LoadBalancer:
             limited=self._pool_out_of_headroom(reports, grid_total),
         )
         control_grid = self._predict_control_grid(reports, grid_total, sample_id)
+        # The minimum-power gate sizes the demand without the trim: the trim
+        # covers the firmware's own import bias, which is no demand of the
+        # house's and would otherwise wake an idle battery for it.
+        demand_grid = control_grid
         control_grid = self._apply_import_trim(control_grid, trim_fresh)
         self._diag_control_grid = control_grid
 
@@ -2524,6 +2648,14 @@ class LoadBalancer:
             and faded_adjustments.get(consumer_id) == 0.0
             and consumer_id not in spill
         ):
+            return self._steer_to_zero(consumer_id, reports, paced=True)
+
+        # Below its minimum power a battery idles and the others take the
+        # whole correction, so the pool never runs one at a few watts.
+        idle = self._below_min_power(reports, demand_grid, eff_part, spill)
+        for cid in idle:
+            eff_part[cid] = 0.0
+        if consumer_id in idle:
             return self._steer_to_zero(consumer_id, reports, paced=True)
 
         residual = self._residual_share(

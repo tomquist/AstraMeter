@@ -12,6 +12,7 @@ import {
   CT_ACTIVE,
   CT_BALANCER,
   CT_DC_KEEPALIVE,
+  CT_MIN_POWER,
   CT_EFFICIENCY,
   CT_SATURATION,
   CT_CLOUD,
@@ -239,6 +240,8 @@ const HA_ADDON_CT_FIELDS = new Set([
   "PEAKSHAVING_THRESHOLD",
   "MIN_EFFICIENT_POWER",
   "EFFICIENCY_ROTATION_INTERVAL",
+  "MIN_DISCHARGE_POWER",
+  "MIN_CHARGE_POWER",
   "CLOUD_REPORTING",
   "CLOUD_REPORTING_HOST",
   "CLOUD_REPORTING_INTERVAL",
@@ -542,7 +545,7 @@ function ctCard(): HTMLElement | null {
   // The add-on only exposes a handful of CT options; show just those for the HA
   // target (the rest need a custom config.ini).
   if (isHa) {
-    const haFields = [...CT_BASIC, ...CT_EFFICIENCY, ...CT_CLOUD].filter((fl) => HA_ADDON_CT_FIELDS.has(fl.key));
+    const haFields = [...CT_BASIC, ...CT_MIN_POWER, ...CT_EFFICIENCY, ...CT_CLOUD].filter((fl) => HA_ADDON_CT_FIELDS.has(fl.key));
     return card(4, "Battery steering (CT002 / CT003)", "Optional CT options exposed by the add-on. Leave them blank to use the defaults.", [
       el("div", { class: "field-grid" }, haFields.map((fl) => fieldControl(fl, f, {}))),
     ]);
@@ -557,6 +560,7 @@ function ctCard(): HTMLElement | null {
     group("Active control", CT_ACTIVE, true),
     group("Multi-battery balancing", CT_BALANCER),
     group("DC battery keep-alive", CT_DC_KEEPALIVE),
+    group("Minimum battery power", CT_MIN_POWER),
     group("Efficiency optimization (AC batteries only)", CT_EFFICIENCY),
     group("Saturation handling", CT_SATURATION),
     group("Cloud reporting (experimental)", CT_CLOUD),

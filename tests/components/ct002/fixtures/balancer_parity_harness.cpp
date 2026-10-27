@@ -29,6 +29,14 @@
 //        whole pool for this tick (inactive/manual sets are derived from each
 //        report's own mode is NOT modeled here — callers pass explicit modes
 //        per target call, matching how the Python harness drives it).
+//   minpow <min_charge> <min_discharge>
+//        Global MIN_CHARGE_POWER / MIN_DISCHARGE_POWER for the next cfg
+//        (absent = 0). Must precede the cfg it applies to.
+//   override <cid> <min_charge> <min_discharge>
+//        Per-consumer minimum-power overrides added to <cid>'s report on every
+//        later target command (< 0 = unset / inherit the global).
+//   idle <cid>                Print 1 if the consumer idles below its minimum
+//                             power, else 0.
 //   sat <cid>                 Print the consumer's saturation score.
 //   last <cid>                Print the consumer's last_target (or "none").
 //   intent <cid>              Print the consumer's last_intent (or "none").
@@ -36,6 +44,7 @@
 // Output: one line per target/sat/last command.
 
 #include <iostream>
+#include <map>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -53,6 +62,8 @@ using esphome::ct002::ReportMap;
 namespace {
 
 double g_clock = 0.0;
+float g_min_charge = 0.0f, g_min_discharge = 0.0f;
+std::map<std::string, std::pair<float, float>> g_min_power_overrides;
 
 ConsumerMode parse_mode(const std::string &mode_str, float manual_value) {
   if (mode_str == "manual") return ConsumerMode{ConsumerModeKind::MANUAL, manual_value};
@@ -88,6 +99,8 @@ int main() {
       cfg.efficiency_rotation_interval = rot;
       cfg.efficiency_saturation_threshold = sat_threshold;
       cfg.min_dc_output = min_dc;
+      cfg.min_charge_power = g_min_charge;
+      cfg.min_discharge_power = g_min_discharge;
       // Optional trailing ramp-pacing pair (absent = keep the struct
       // defaults; assigning on a failed extraction would zero them and
       // silently disable pacing).
@@ -135,6 +148,11 @@ int main() {
         if (md >= 0.0f) r.min_dc_output = md;
         r.efficiency_window_weight = eww;
         r.weight = w;
+        auto ov = g_min_power_overrides.find(rc);
+        if (ov != g_min_power_overrides.end()) {
+          if (ov->second.first >= 0.0f) r.min_charge_power = ov->second.first;
+          if (ov->second.second >= 0.0f) r.min_discharge_power = ov->second.second;
+        }
         reports[rc] = r;
       }
       // sample_id mirrors the meter reading (as in production, where it is the
@@ -144,6 +162,18 @@ int main() {
       const auto out = balancer->compute_target(cid, parse_mode(mode_str, manual), reports,
                                                 grid, {}, {}, sample_id);
       std::cout << out[0] << " " << out[1] << " " << out[2] << "\n";
+    } else if (cmd == "minpow") {
+      in >> g_min_charge >> g_min_discharge;
+    } else if (cmd == "override") {
+      std::string cid;
+      float mc = -1.0f, md = -1.0f;
+      in >> cid >> mc >> md;
+      g_min_power_overrides[cid] = {mc, md};
+    } else if (cmd == "idle") {
+      std::string cid;
+      in >> cid;
+      const auto snap = balancer->snapshot_consumer(cid);
+      std::cout << ((snap.has_value() && snap->min_power_idle) ? 1 : 0) << "\n";
     } else if (cmd == "sat") {
       std::string cid;
       in >> cid;

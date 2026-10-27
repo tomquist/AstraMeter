@@ -282,6 +282,7 @@ export function batteryHealth(consumer: ConsumerStatus): Health {
   const saturation = consumer.balancer?.saturation;
   if (saturation != null && saturation >= 0.85) return health("warn", "Saturated");
   if (consumer.balancer?.deprioritized) return health("idle", "Parked");
+  if (consumer.balancer?.min_power_idle) return health("idle", "Below minimum");
   return health("ok", "Auto");
 }
 

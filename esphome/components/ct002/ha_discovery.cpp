@@ -344,6 +344,27 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
       mdo["entity_category"] = "config";
     }
 
+    // Min Charge / Min Discharge Power numbers — below these a battery idles at
+    // 0 W rather than run at a few watts, where its inverter is least efficient.
+    for (const char *field : {"min_charge_power", "min_discharge_power"}) {
+      const std::string key = field;
+      JsonObject mp = components[key].to<JsonObject>();
+      mp["platform"] = "number";
+      mp["unique_id"] = uid_prefix + "_" + key;
+      mp["name"] = key == "min_charge_power" ? "Min Charge Power" : "Min Discharge Power";
+      mp["unit_of_measurement"] = "W";
+      mp["device_class"] = "power";
+      mp["min"] = 0;
+      mp["max"] = static_cast<int>(controls::BATTERY_POWER_MAX);
+      mp["step"] = 1;
+      mp["mode"] = "box";
+      mp["state_topic"] = state_topic;
+      mp["value_template"] = "{{ value_json." + key + " | default(0) }}";
+      mp["command_topic"] = state_topic + "/" + key + "/set";
+      mp["retain"] = true;
+      mp["entity_category"] = "config";
+    }
+
     // Device info
     JsonObject device = root["device"].to<JsonObject>();
     JsonArray identifiers = device["identifiers"].to<JsonArray>();

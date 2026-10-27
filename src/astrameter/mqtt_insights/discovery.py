@@ -412,6 +412,27 @@ def build_ct002_consumer_discovery(
             template="{{ value_json.min_dc_output | default(0) }}",
         )
 
+    # Min Charge / Min Discharge Power — below these a battery idles at 0 W
+    # rather than run at a few watts, where its inverter is least efficient.
+    components["min_charge_power"] = number(
+        "min_charge_power",
+        "Min Charge Power",
+        unit="W",
+        device_class="power",
+        step=1,
+        mode="box",
+        template="{{ value_json.min_charge_power | default(0) }}",
+    )
+    components["min_discharge_power"] = number(
+        "min_discharge_power",
+        "Min Discharge Power",
+        unit="W",
+        device_class="power",
+        step=1,
+        mode="box",
+        template="{{ value_json.min_discharge_power | default(0) }}",
+    )
+
     mac_slug = _sanitize_id(consumer_id).lower().replace("-", "").replace("_", "")
 
     device_info: dict = {

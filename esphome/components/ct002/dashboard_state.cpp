@@ -128,6 +128,8 @@ status::DeviceStatus CT002Component::status_snapshot(double wall_now) const {
     row.efficiency_window_weight_pct = consumer->efficiency_window_weight * 100.0f;
     row.min_dc_output_w = consumer->min_dc_output;
     row.min_dc_output_applicable = needs_dc_output_floor(consumer->device_type);
+    row.min_charge_power_w = this->effective_min_charge_power(consumer->consumer_id);
+    row.min_discharge_power_w = this->effective_min_discharge_power(consumer->consumer_id);
     if (this->balancer_) row.balancer = this->balancer_->snapshot_consumer(consumer->consumer_id);
     out.consumers.push_back(std::move(row));
   }
@@ -206,6 +208,10 @@ bool apply_consumer_control(CT002Component *ct002, const std::string &consumer_i
     ct002->set_consumer_efficiency_window_weight(consumer_id, value.number);
   } else if (field == "min_dc_output") {
     ct002->set_consumer_min_dc_output(consumer_id, value.number);
+  } else if (field == "min_charge_power") {
+    ct002->set_consumer_min_charge_power(consumer_id, value.number);
+  } else if (field == "min_discharge_power") {
+    ct002->set_consumer_min_discharge_power(consumer_id, value.number);
   } else {
     return false;
   }

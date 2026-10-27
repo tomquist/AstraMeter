@@ -87,6 +87,11 @@ class Scenario:
         """The CT's peak shaving threshold (W) for this scenario; 0 = off."""
         return float(self.ct_kwargs.get("peakshaving_threshold", 0.0))
 
+    @property
+    def min_discharge_power(self) -> float:
+        """The batteries' minimum discharge (W) for this scenario; 0 = off."""
+        return float(self.ct_kwargs.get("min_discharge_power", 0.0))
+
 
 @dataclass
 class EvalWorld:

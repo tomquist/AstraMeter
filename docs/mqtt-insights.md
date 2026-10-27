@@ -354,6 +354,13 @@ client has the same controls:
   [MIN_DC_OUTPUT](ct002.md#dc-battery-keep-alive)). Only shown for DC batteries
   where it has an effect (e.g. the Marstek B2500); it overrides the global setting
   for that battery.
+- **Min Charge Power** / **Min Discharge Power** — below these a battery stays
+  idle at 0 W instead of charging or discharging at a few watts, where it is
+  least efficient (see
+  [Minimum charge and discharge power](ct002.md#minimum-charge-and-discharge-power)).
+  Each shows the value in effect for the battery, the global
+  `MIN_CHARGE_POWER` / `MIN_DISCHARGE_POWER` until you set its own; setting it
+  overrides the global one for that battery. `0` lets it run at any power.
 
 The CT device itself also exposes two config controls:
 

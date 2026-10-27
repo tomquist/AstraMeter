@@ -966,6 +966,14 @@ export const CT_DC_KEEPALIVE: Field[] = [
   { key: "MIN_DC_OUTPUT", ey: "min_dc_output", label: "Min DC output (W)", help: "Minimum discharge to keep a DC battery's inverter (e.g. Marstek B2500) from switching off at 0 W and sleeping under high PV surplus. Applied per DC-only battery; AC batteries (Venus) and Jupiter are unaffected. 0 = off; recommended >= 20.", type: "number", placeholder: "0" },
 ];
 
+// Applies to each battery individually (also with a single battery); a battery
+// can override both from Home Assistant or the dashboard. The ESPHome keys live
+// under the `balancer:` block.
+export const CT_MIN_POWER: Field[] = [
+  { key: "MIN_DISCHARGE_POWER", ey: "min_discharge_power", label: "Min discharge power (W)", help: "A battery is least efficient at a few watts. When its share of the household demand is smaller than this, it stays idle and the other batteries or the grid cover it; it resumes once its share is 20% above. Example: 50 lets a 20 W night standby come from the grid. 0 = off.", type: "number", placeholder: "0" },
+  { key: "MIN_CHARGE_POWER", ey: "min_charge_power", label: "Min charge power (W)", help: "When a battery's share of the solar surplus is smaller than this, it stays idle and the surplus goes to the other batteries or to the grid. Storing even a small surplus usually beats exporting it, so leave this at 0 unless you know you want it. 0 = off.", type: "number", placeholder: "0" },
+];
+
 export const CT_EFFICIENCY: Field[] = [
   { key: "MIN_EFFICIENT_POWER", ey: "min_efficient_power", label: "Min efficient power (W)", help: "Concentrate small loads on fewer batteries so each stays efficient. 0 = off. Not recommended for DC batteries.", type: "number", placeholder: "0" },
   { key: "EFFICIENCY_ROTATION_INTERVAL", ey: "efficiency_rotation_interval", label: "Rotation interval (seconds)", help: "How often priority rotates between batteries. Default 900 (min 10).", type: "number", placeholder: "900" },

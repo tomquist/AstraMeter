@@ -334,6 +334,24 @@ export const OPTION_META: Record<string, OptionMeta> = {
       "if you need it; 0 is off.",
     placeholder: "0",
   },
+  min_discharge_power: {
+    label: "Minimum discharge power (W)",
+    group: CONTROL,
+    help:
+      "A battery is least efficient at a few watts. Below this share of the " +
+      "demand it stays idle and the grid or the other batteries cover it; it " +
+      "resumes 20% above. A battery can override it on the Batteries tab.",
+    placeholder: "0",
+  },
+  min_charge_power: {
+    label: "Minimum charge power (W)",
+    group: CONTROL,
+    help:
+      "Below this share of the solar surplus a battery stays idle and the " +
+      "surplus goes to the other batteries or the grid. Storing even a small " +
+      "surplus usually pays more than exporting it, so 0 is usually right.",
+    placeholder: "0",
+  },
   saturation_grace_seconds: {
     label: "Probe window (s)",
     group: CONTROL,

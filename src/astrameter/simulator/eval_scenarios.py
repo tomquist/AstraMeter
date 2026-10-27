@@ -162,6 +162,43 @@ def _household_steps(rng: random.Random, duration: float) -> list[Event]:
     return events
 
 
+# A quiet night: a small standby with the fridge compressor cycling on top and
+# one kettle, the case MIN_DISCHARGE_POWER is for (issue #721).
+_NIGHT_BASE_LOAD = [19.0, 0.0, 0.0]
+_NIGHT_LOADS = [Load("fridge", 90.0, "A"), Load("kettle", 2000.0, "A")]
+_NIGHT_MIN_DISCHARGE_W = 50.0
+
+
+def _night_standby(rng: random.Random, duration: float) -> list[Event]:
+    """The fridge runs ~8 minutes in every ~25, and the kettle boils once.
+
+    The standby alone is below the minimum, so the battery must stay idle
+    through it, cover the fridge and the kettle in full, and go back to idle
+    each time they stop.
+    """
+    events: list[Event] = []
+
+    def load_event(t: float, name: str, active: bool) -> None:
+        state = "on" if active else "off"
+        events.append(
+            Event(
+                at=t,
+                label=f"{name}_{state}",
+                apply=_bind(EvalWorld.set_load, name, active),
+            )
+        )
+
+    t = rng.uniform(120.0, 300.0)
+    while t + 480.0 < duration:
+        load_event(t, "fridge", True)
+        load_event(t + rng.uniform(420.0, 540.0), "fridge", False)
+        t += rng.uniform(1380.0, 1620.0)
+    kettle = duration * 0.6 + rng.uniform(-60.0, 60.0)
+    load_event(kettle, "kettle", True)
+    load_event(kettle + 150.0, "kettle", False)
+    return events
+
+
 def _hob_sessions(rng: random.Random, duration: float) -> list[Event]:
     """Two cooking sessions on a hob that cycles its element (~45 s on, ~30 s
     off), each lasting about ten minutes: a load well above what the two
@@ -490,6 +527,24 @@ def build_scenarios() -> dict[str, Scenario]:
             build_events=lambda rng: _household_steps(rng, dur_steps),
             meter_interval_s=10.0,
             meter_latency_s=1.0,
+        )
+    )
+
+    dur_night = 3600.0
+    add(
+        Scenario(
+            name="single_venus_night_standby",
+            description=(
+                "One Venus with a 50 W minimum discharge over a 19 W night "
+                "standby: idle below it, the fridge and a kettle covered in full"
+            ),
+            batteries=[_VENUS],
+            duration_s=dur_night,
+            base_load=list(_NIGHT_BASE_LOAD),
+            base_noise=3.0,
+            loads=list(_NIGHT_LOADS),
+            build_events=lambda rng: _night_standby(rng, dur_night),
+            ct_kwargs={"min_discharge_power": _NIGHT_MIN_DISCHARGE_W},
         )
     )
 

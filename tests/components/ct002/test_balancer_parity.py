@@ -98,6 +98,8 @@ class PyDriver:
         self.clock = _Clock()
         self.balancer: LoadBalancer | None = None
         self.out: list[str] = []
+        self.min_power = (0.0, 0.0)
+        self.min_power_overrides: dict[str, tuple[float, float]] = {}
 
     def feed(self, line: str) -> None:
         parts = line.split()
@@ -142,6 +144,8 @@ class PyDriver:
                 efficiency_rotation_interval=float(rot),
                 efficiency_saturation_threshold=float(sat_threshold),
                 min_dc_output=min_dc,
+                min_charge_power=self.min_power[0],
+                min_discharge_power=self.min_power[1],
                 **pace_kwargs,
             )
             self.balancer = LoadBalancer(
@@ -155,6 +159,13 @@ class PyDriver:
                 clock=self.clock,
                 reset_fn=None,
             )
+        elif cmd == "minpow":
+            self.min_power = (float(parts[1]), float(parts[2]))
+        elif cmd == "override":
+            self.min_power_overrides[parts[1]] = (float(parts[2]), float(parts[3]))
+        elif cmd == "idle":
+            snap = self.balancer.snapshot_consumer(parts[1])
+            self.out.append("1" if snap is not None and snap.min_power_idle else "0")
         elif cmd == "clock":
             self.clock.now = float(parts[1])
         elif cmd == "advance":
@@ -171,7 +182,12 @@ class PyDriver:
             i = 6
             for _ in range(n):
                 rc, dev, phase, power, md, eww, weight = parts[i : i + 7]
+                min_charge, min_discharge = self.min_power_overrides.get(
+                    rc, (-1.0, -1.0)
+                )
                 reports[rc] = ConsumerReport(
+                    min_charge_power=None if min_charge < 0 else min_charge,
+                    min_discharge_power=None if min_discharge < 0 else min_discharge,
                     device_type=dev,
                     phase=phase,
                     power=int(power),
@@ -492,6 +508,50 @@ def _scenario_min_dc_output() -> list[str]:
     return lines
 
 
+def _scenario_min_power() -> list[str]:
+    """Exercise MIN_CHARGE_POWER / MIN_DISCHARGE_POWER (issue #721): a pool of
+    three on one phase whose demand sweeps through every minimum in both
+    directions, so batteries drop out one at a time, resume past the
+    hysteresis, and one battery's own override is judged on its own."""
+    lines = [
+        "minpow 60 50",
+        "cfg 1 0 900 0.4 0.15 20 90 1 0 30 100 0 15",
+        "override c -1 120",
+        "clock 2000",
+    ]
+    # (grid, output of a, b, c) per tick: idle standby, a step up through the
+    # minimums, back down, into a surplus and out again.
+    ticks = [
+        (19, 0, 0, 0),
+        (70, 0, 0, 0),
+        (40, 30, 0, 0),
+        (130, 0, 0, 0),
+        (60, 70, 0, 0),
+        (400, 0, 0, 0),
+        (100, 150, 150, 0),
+        (-120, 150, 150, 0),
+        (-30, 60, 0, 0),
+        (-100, 0, 0, 0),
+        (-200, 0, 0, 0),
+        (-50, -100, -100, 0),
+        (-400, 0, 0, 0),
+        (40, -60, -60, -60),
+        (300, 0, 0, 0),
+    ]
+    for grid, *outputs in ticks:
+        for _ in range(2):
+            pool = [
+                _report(cid, "A", power, "HMG-50")
+                for cid, power in zip("abc", outputs, strict=True)
+            ]
+            for cid in "abc":
+                lines.append(_target(cid, pool, grid=grid))
+                lines.append(f"idle {cid}")
+                lines.append(f"last {cid}")
+            lines.append("advance 1")
+    return lines
+
+
 def _scenario_import_trim() -> list[str]:
     """Hold a steady small grid import for many polls so the steady-import trim
     engages (dwell crosses IMPORT_TRIM_DWELL), then drop into export so the dwell
@@ -625,6 +685,11 @@ def test_parity_power_ceilings(harness: Path) -> None:
 def test_parity_import_trim(harness: Path) -> None:
     lines = _scenario_import_trim()
     _compare("import_trim", lines, _run_cpp(harness, lines), _run_py(lines))
+
+
+def test_parity_min_power(harness: Path) -> None:
+    lines = _scenario_min_power()
+    _compare("min_power", lines, _run_cpp(harness, lines), _run_py(lines))
 
 
 def test_parity_min_dc_output(harness: Path) -> None:

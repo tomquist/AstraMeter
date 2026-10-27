@@ -189,6 +189,8 @@ def test_an_invalid_peakshaving_threshold_is_refused_like_python(
         ("distribution_weight", "-1"),
         ("efficiency_window_weight", "101"),
         ("min_dc_output", "5000"),
+        ("min_charge_power", "11041"),
+        ("min_discharge_power", "-1"),
     ],
 )
 def test_out_of_range_is_refused_with_python_s_own_message(

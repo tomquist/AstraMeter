@@ -167,6 +167,15 @@ def _control_quality_evidence(quality: ControlQualitySnapshot) -> dict[str, Any]
     }
 
 
+def _min_power_value(name: str, value: float) -> float:
+    """*value* as a minimum charge / discharge power: finite and ``>= 0``."""
+    v = float(value)
+    if not math.isfinite(v) or v < 0.0:
+        msg = f"{name} must be finite and >= 0, got {value!r}"
+        raise ValueError(msg)
+    return v
+
+
 def _values_finite(values: Iterable[Any]) -> bool:
     """True iff every meter value coerces to a finite number.
 
@@ -300,6 +309,11 @@ class Consumer:
     # Per-device override (W) for the MIN_DC_OUTPUT wake floor; ``None`` inherits
     # the global setting.  Tuned live via the MQTT "Min DC Output" entity.
     min_dc_output: float | None = None
+    # Per-device overrides (W) for MIN_CHARGE_POWER / MIN_DISCHARGE_POWER;
+    # ``None`` inherits the global setting.  Tuned live via the MQTT "Min
+    # Charge Power" / "Min Discharge Power" entities.
+    min_charge_power: float | None = None
+    min_discharge_power: float | None = None
     # Last UDP source address seen for this consumer, if the protocol provides it.
     last_ip: str = ""
 
@@ -323,6 +337,8 @@ class ConsumerOverride:
     distribution_weight: float = 1.0
     efficiency_window_weight: float = 1.0
     min_dc_output: float | None = None
+    min_charge_power: float | None = None
+    min_discharge_power: float | None = None
 
 
 # Lowercase phase label carried on reporting rows: the three physical phases,
@@ -414,6 +430,9 @@ class ConsumerSnapshot:
     efficiency_window_weight: float
     min_dc_output: float | None
     min_dc_output_applicable: bool
+    # In effect for this battery: its own setting, else the global one.
+    min_charge_power: float
+    min_discharge_power: float
     builtin_inverter: bool
     ac_input: bool
     dc_input: bool
@@ -596,6 +615,8 @@ class CT002:
         consumer.distribution_weight = override.distribution_weight
         consumer.efficiency_window_weight = override.efficiency_window_weight
         consumer.min_dc_output = override.min_dc_output
+        consumer.min_charge_power = override.min_charge_power
+        consumer.min_discharge_power = override.min_discharge_power
 
     def _snapshot_override(self, consumer: Consumer) -> None:
         """Record a consumer's current control state so it survives eviction.
@@ -610,6 +631,8 @@ class CT002:
             distribution_weight=consumer.distribution_weight,
             efficiency_window_weight=consumer.efficiency_window_weight,
             min_dc_output=consumer.min_dc_output,
+            min_charge_power=consumer.min_charge_power,
+            min_discharge_power=consumer.min_discharge_power,
         )
 
     def set_consumer_value(self, consumer_id: str, values: list[float]) -> None:
@@ -676,6 +699,39 @@ class CT002:
         consumer = self._get_consumer(consumer_id)
         consumer.min_dc_output = v
         self._snapshot_override(consumer)
+
+    def set_consumer_min_charge_power(self, consumer_id: str, value: float) -> None:
+        """Set the per-device MIN_CHARGE_POWER (W) for a battery.
+
+        Must be finite and ``>= 0``.  Overrides the global ``MIN_CHARGE_POWER``
+        for this battery; ``0`` lets it charge at any power.
+        """
+        consumer = self._get_consumer(consumer_id)
+        consumer.min_charge_power = _min_power_value("min_charge_power", value)
+        self._snapshot_override(consumer)
+
+    def set_consumer_min_discharge_power(self, consumer_id: str, value: float) -> None:
+        """Set the per-device MIN_DISCHARGE_POWER (W) for a battery.
+
+        Must be finite and ``>= 0``.  Overrides the global
+        ``MIN_DISCHARGE_POWER`` for this battery; ``0`` lets it discharge at
+        any power.
+        """
+        consumer = self._get_consumer(consumer_id)
+        consumer.min_discharge_power = _min_power_value("min_discharge_power", value)
+        self._snapshot_override(consumer)
+
+    def effective_min_charge_power(self, consumer_id: str) -> float:
+        """The MIN_CHARGE_POWER in effect for a battery (W)."""
+        consumer = self._consumers.get(consumer_id)
+        own = consumer.min_charge_power if consumer else None
+        return self._balancer.config.min_charge_power if own is None else own
+
+    def effective_min_discharge_power(self, consumer_id: str) -> float:
+        """The MIN_DISCHARGE_POWER in effect for a battery (W)."""
+        consumer = self._consumers.get(consumer_id)
+        own = consumer.min_discharge_power if consumer else None
+        return self._balancer.config.min_discharge_power if own is None else own
 
     def set_consumer_auto_target(self, consumer_id: str, auto: bool) -> None:
         """Toggle auto target. auto=True means automatic control (default).
@@ -968,6 +1024,8 @@ class CT002:
                 weight=c.distribution_weight,
                 efficiency_window_weight=c.efficiency_window_weight,
                 min_dc_output=c.min_dc_output,
+                min_charge_power=c.min_charge_power,
+                min_discharge_power=c.min_discharge_power,
             )
             for cid, c in self._consumers.items()
             if c.timestamp > 0 and c.phase in STEERED_PHASES
@@ -1088,6 +1146,8 @@ class CT002:
             efficiency_window_weight=consumer.efficiency_window_weight,
             min_dc_output=consumer.min_dc_output,
             min_dc_output_applicable=_needs_dc_output_floor(consumer.device_type),
+            min_charge_power=self.effective_min_charge_power(consumer_id),
+            min_discharge_power=self.effective_min_discharge_power(consumer_id),
             builtin_inverter=caps.has_builtin_inverter,
             ac_input=caps.has_ac_input,
             dc_input=caps.has_dc_input,
@@ -1728,6 +1788,8 @@ class CT002:
                 consumer.efficiency_window_weight if consumer else 1.0
             ),
             "min_dc_output": consumer.min_dc_output if consumer else None,
+            "min_charge_power": self.effective_min_charge_power(consumer_id),
+            "min_discharge_power": self.effective_min_discharge_power(consumer_id),
             "active_control": self.active_control,
             "peakshaving_threshold": self.peakshaving_threshold,
             "efficiency_rotation": self._balancer.efficiency_rotation_enabled,

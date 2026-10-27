@@ -1,4 +1,5 @@
 #include "balancer.h"
+#include "controls.h"
 
 #include <algorithm>
 #include <cctype>
@@ -163,6 +164,8 @@ void BalancerConfig::clamp() {
       std::max(0.0, std::min(1.0, efficiency_saturation_threshold));
   clamp_v(efficiency_demand_alpha, 0.01f, 1.0f);
   if (min_dc_output < 0.0f) min_dc_output = 0.0f;
+  clamp_v(min_charge_power, 0.0f, controls::BATTERY_POWER_MAX);
+  clamp_v(min_discharge_power, 0.0f, controls::BATTERY_POWER_MAX);
   if (pace_base_step < 0.0f) pace_base_step = 0.0f;
   if (pace_max_step < pace_base_step) pace_max_step = pace_base_step;
   clamp_v(osc_damp_max, 0.0f, 1.0f);
@@ -776,6 +779,89 @@ std::array<float, 3> LoadBalancer::apply_min_dc_output_(
                      /*weights=*/nullptr, /*pace=*/false, &phase);
 }
 
+// Its own MIN_CHARGE_POWER / MIN_DISCHARGE_POWER override wins over the global
+// one; 0 means no minimum. Mirrors balancer.py _min_power.
+float LoadBalancer::min_power_(const ConsumerReport &report, int sign) const {
+  if (sign > 0)
+    return report.min_discharge_power ? std::max(0.0f, *report.min_discharge_power)
+                                      : this->cfg_.min_discharge_power;
+  if (sign < 0)
+    return report.min_charge_power ? std::max(0.0f, *report.min_charge_power)
+                                   : this->cfg_.min_charge_power;
+  return 0.0f;
+}
+
+// The demand is what the batteries taking a share deliver plus the predicted
+// grid. It is split the way the share math splits it, and while any battery's
+// share falls below its minimum in the demand's direction, the one furthest
+// below idles and the rest are split again; an idle battery resumes only once
+// its share reaches EFFICIENCY_HYSTERESIS_FACTOR times its minimum. The
+// spilling standby reserve and batteries taking no share are left as they are.
+// Mirrors balancer.py _below_min_power.
+std::unordered_set<std::string> LoadBalancer::below_min_power_(
+    const ReportMap &reports, float demand_grid,
+    const std::unordered_map<std::string, float> &eff_part, bool exempt_spilling) {
+  std::vector<std::string> ids;
+  for (const auto &r : reports) {
+    auto it = eff_part.find(r.first);
+    if (it == eff_part.end() || it->second <= 0.0f || r.second.weight <= 0.0f) continue;
+    if (exempt_spilling && this->spilling_contains_(r.first)) continue;
+    ids.push_back(r.first);
+  }
+  std::sort(ids.begin(), ids.end());
+  float demand = demand_grid;
+  for (const auto &cid : ids) demand += reports.at(cid).power;
+  const int sign = sign_of(demand);
+  auto was_idle = [&](const std::string &cid) {
+    auto it = this->consumers_.find(cid);
+    return it != this->consumers_.end() && it->second.min_power_idle;
+  };
+  std::unordered_set<std::string> idle;
+  if (sign == 0) {
+    // No direction to judge a minimum in: nobody changes state.
+    for (const auto &cid : ids)
+      if (was_idle(cid)) idle.insert(cid);
+    return idle;
+  }
+  std::unordered_map<std::string, float> weights;
+  for (const auto &cid : ids) weights[cid] = eff_part.at(cid) * this->share_weight_(reports, cid);
+  const auto ceilings = this->ceilings_(ids, sign);
+  auto threshold = [&](const std::string &cid) {
+    const float minimum = this->min_power_(reports.at(cid), sign);
+    if (was_idle(cid))
+      return minimum * static_cast<float>(EFFICIENCY_HYSTERESIS_FACTOR);
+    return minimum;
+  };
+  std::vector<std::string> running = ids;
+  while (!running.empty()) {
+    bool found = false;
+    float worst_ratio = 0.0f;
+    std::string worst;
+    for (const auto &cid : running) {
+      const float floor = threshold(cid);
+      if (floor <= 0.0f) continue;
+      const float share =
+          capped_weighted_share(demand, weights, running, ceilings, &cid) * static_cast<float>(sign);
+      if (share >= floor) continue;
+      const float ratio = share / floor;
+      // Ties go to the smallest id, as Python's min over (ratio, id) does.
+      if (!found || ratio < worst_ratio || (ratio == worst_ratio && cid < worst)) {
+        found = true;
+        worst_ratio = ratio;
+        worst = cid;
+      }
+    }
+    if (!found) break;
+    running.erase(std::find(running.begin(), running.end(), worst));
+    idle.insert(worst);
+  }
+  for (const auto &cid : ids) {
+    const bool now_idle = idle.count(cid) > 0;
+    if (was_idle(cid) != now_idle) this->get_consumer_(cid).min_power_idle = now_idle;
+  }
+  return idle;
+}
+
 // With paced=true the wind-down reading goes through the ramp-pacing cap:
 // the battery firmware applies a charge-direction reading in full in one
 // cycle, so an unpaced wind-down dumps a discharging consumer's whole output
@@ -1183,6 +1269,7 @@ std::optional<BalancerConsumerSnapshot> LoadBalancer::snapshot_consumer(
   out.pace_sign = state.pace_sign;
   out.osc_score = state.osc_score;
   out.osc_last_sign = state.osc_last_sign;
+  out.min_power_idle = state.min_power_idle;
   return out;
 }
 
@@ -1336,8 +1423,11 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
   // "stable". Feeding every poll is safe because the EMAs are time-weighted.
   this->control_quality_.update(grid_total, !reports.empty(),
                                 this->pool_out_of_headroom_(reports, grid_total));
-  const float control_grid = this->apply_import_trim_(
-      this->predict_control_grid_(reports, grid_total, sample_id), trim_fresh);
+  // The minimum-power gate sizes the demand without the trim: the trim covers
+  // the firmware's own import bias, which is no demand of the house's and
+  // would otherwise wake an idle battery for it.
+  const float demand_grid = this->predict_control_grid_(reports, grid_total, sample_id);
+  const float control_grid = this->apply_import_trim_(demand_grid, trim_fresh);
   this->diag_control_grid_ = control_grid;
 
   // Weight zero explicitly parks the battery, even if the entire pool is
@@ -1429,6 +1519,13 @@ std::array<float, 3> LoadBalancer::compute_auto_target_(
     if (it != faded_adjustments.end() && it->second == 0.0f)
       return this->steer_to_zero_(consumer_id, reports, /*paced=*/true);
   }
+
+  // Below its minimum power a battery idles and the others take the whole
+  // correction, so the pool never runs one at a few watts.
+  const auto idle = this->below_min_power_(reports, demand_grid, eff_part, true);
+  for (const auto &cid : idle) eff_part[cid] = 0.0f;
+  if (consumer_id && idle.count(*consumer_id))
+    return this->steer_to_zero_(consumer_id, reports, /*paced=*/true);
 
   float residual =
       this->residual_share_(consumer_id, reports, control_grid, eff_part, charge_blind);

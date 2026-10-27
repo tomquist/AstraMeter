@@ -260,6 +260,12 @@ struct BalancerConfig {
   // Minimum net discharge (W) to keep an external-inverter DC battery awake.
   // 0 disables. See issue #425 and balancer.py.
   float min_dc_output{0.0f};
+  // Minimum charge / discharge (W) a battery runs at (issue #721): below it the
+  // battery idles at 0 W and the others, or the grid, cover its share. A
+  // battery's own setting (ConsumerReport) overrides these. 0 disables. See
+  // balancer.py _below_min_power.
+  float min_charge_power{0.0f};
+  float min_discharge_power{0.0f};
   // Adaptive grid-state predictor: act on a predicted grid that credits the
   // pool's freshly-reported output between meter refreshes and trusts each
   // fresh meter sample by an online-learned amount, compensating for meter
@@ -342,6 +348,9 @@ struct BalancerConsumerState {
   float ceiling_run_anchor{0.0f};
   double ceiling_run_since{0.0};
   int ceiling_run_polls{0};
+  // Idling at 0 W because its share fell below its minimum charge / discharge
+  // power (see below_min_power_); it resumes only past the hysteresis.
+  bool min_power_idle{false};
 
   // Learned ceiling in direction *sign* (+ discharge), 0 if none.
   float ceiling(int sign) const {
@@ -372,6 +381,7 @@ struct BalancerConsumerSnapshot {
   int pace_sign{0};
   float osc_score{0.0f};
   int osc_last_sign{0};
+  bool min_power_idle{false};
 };
 
 struct PredictorSnapshot {
@@ -437,6 +447,10 @@ struct ConsumerReport {
   // Mirrors the Python reports dict's "min_dc_output" key. Default-initialized
   // so aggregate ``ConsumerReport{...}`` init stays warning-clean.
   std::optional<float> min_dc_output{};
+  // Per-device MIN_CHARGE_POWER / MIN_DISCHARGE_POWER overrides (W); unset =
+  // inherit the global setting. Mirror the Python ConsumerReport fields.
+  std::optional<float> min_charge_power{};
+  std::optional<float> min_discharge_power{};
 };
 
 using ReportMap = std::unordered_map<std::string, ConsumerReport>;
@@ -671,6 +685,15 @@ class LoadBalancer {
   std::array<float, 3> apply_min_dc_output_(const std::optional<std::string> &consumer_id,
                                             const ReportMap &reports,
                                             std::array<float, 3> result);
+
+  // The least *report*'s battery may run at in direction *sign* (W); 0 = none.
+  // Mirrors balancer.py _min_power.
+  float min_power_(const ConsumerReport &report, int sign) const;
+  // The batteries that idle because their share is below their minimum, and
+  // each battery's min_power_idle updated. Mirrors balancer.py _below_min_power.
+  std::unordered_set<std::string> below_min_power_(
+      const ReportMap &reports, float demand_grid,
+      const std::unordered_map<std::string, float> &eff_part, bool exempt_spilling);
 
   std::array<float, 3> steer_to_zero_(const std::optional<std::string> &consumer_id,
                                       const ReportMap &reports, bool paced = false);
