@@ -141,6 +141,13 @@ CONF_EFFICIENCY_FADE_ALPHA = "efficiency_fade_alpha"
 CONF_EFFICIENCY_SATURATION_THRESHOLD = "efficiency_saturation_threshold"
 CONF_EFFICIENCY_DEMAND_ALPHA = "efficiency_demand_alpha"
 CONF_MIN_DC_OUTPUT = "min_dc_output"
+CONF_MIN_CHARGE_POWER = "min_charge_power"
+CONF_MIN_DISCHARGE_POWER = "min_discharge_power"
+CONF_MAX_CHARGE_POWER = "max_charge_power"
+CONF_MAX_DISCHARGE_POWER = "max_discharge_power"
+# Upper bound of a per-battery power setting (W): a three-phase connection on
+# the default 16 A fuse. Mirrors BATTERY_POWER_MAX in controls.{h,py}.
+BATTERY_POWER_MAX = 3 * 230.0 * 16.0
 CONF_GRID_PREDICT_TRUST = "grid_predict_trust"
 CONF_CONCENTRATE_DEADBAND = "concentrate_deadband"
 CONF_IMPORT_TRIM_W = "import_trim_w"
@@ -595,6 +602,19 @@ BALANCER_SCHEMA = cv.Schema(
             min=0.01, max=1.0
         ),
         cv.Optional(CONF_MIN_DC_OUTPUT, default=0.0): cv.float_range(min=0.0),
+        cv.Optional(CONF_MIN_CHARGE_POWER, default=0.0): cv.float_range(
+            min=0.0, max=BATTERY_POWER_MAX
+        ),
+        cv.Optional(CONF_MIN_DISCHARGE_POWER, default=0.0): cv.float_range(
+            min=0.0, max=BATTERY_POWER_MAX
+        ),
+        # Unset = no limit; 0 keeps a battery out of that direction.
+        cv.Optional(CONF_MAX_CHARGE_POWER): cv.float_range(
+            min=0.0, max=BATTERY_POWER_MAX
+        ),
+        cv.Optional(CONF_MAX_DISCHARGE_POWER): cv.float_range(
+            min=0.0, max=BATTERY_POWER_MAX
+        ),
         cv.Optional(CONF_GRID_PREDICT_TRUST, default=0.5): cv.float_range(
             min=0.0, max=1.0
         ),
@@ -1242,8 +1262,7 @@ async def to_code(config):
         return float(value.total_seconds if hasattr(value, "total_seconds") else value)
 
     bal = config.get(CONF_BALANCER, {})
-    bcfg = cg.StructInitializer(
-        BalancerConfig,
+    bcfg_fields = [
         ("fair_distribution", bal.get(CONF_FAIR_DISTRIBUTION, True)),
         ("balance_gain", bal.get(CONF_BALANCE_GAIN, 0.2)),
         ("balance_deadband", bal.get(CONF_BALANCE_DEADBAND, 25.0)),
@@ -1271,10 +1290,24 @@ async def to_code(config):
         ),
         ("efficiency_demand_alpha", bal.get(CONF_EFFICIENCY_DEMAND_ALPHA, 0.1)),
         ("min_dc_output", bal.get(CONF_MIN_DC_OUTPUT, 0.0)),
+        ("min_charge_power", bal.get(CONF_MIN_CHARGE_POWER, 0.0)),
+        ("min_discharge_power", bal.get(CONF_MIN_DISCHARGE_POWER, 0.0)),
         ("grid_predict_trust", bal.get(CONF_GRID_PREDICT_TRUST, 0.5)),
         ("concentrate_deadband", bal.get(CONF_CONCENTRATE_DEADBAND, 60.0)),
         ("import_trim_w", bal.get(CONF_IMPORT_TRIM_W, 15.0)),
+    ]
+    # Unset = no limit: the C++ fields are std::optional and stay empty. They
+    # follow min_discharge_power, since designated initializers must keep the
+    # struct's declaration order.
+    at = 1 + next(
+        i for i, (k, _) in enumerate(bcfg_fields) if k == "min_discharge_power"
     )
+    bcfg_fields[at:at] = [
+        (key, bal[key])
+        for key in (CONF_MAX_CHARGE_POWER, CONF_MAX_DISCHARGE_POWER)
+        if key in bal
+    ]
+    bcfg = cg.StructInitializer(BalancerConfig, *bcfg_fields)
     cg.add(var.set_balancer_config(bcfg))
 
     sat = config.get(CONF_SATURATION, {})

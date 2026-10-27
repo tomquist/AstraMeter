@@ -11,6 +11,7 @@ import {
   CT_ACTIVE,
   CT_BALANCER,
   CT_DC_KEEPALIVE,
+  CT_POWER_LIMITS,
   CT_EFFICIENCY,
   CT_SATURATION,
   CT_CLOUD,
@@ -163,6 +164,7 @@ function ctSection(state: State, sectionName: string): string {
     CT_ACTIVE,
     CT_BALANCER,
     CT_DC_KEEPALIVE,
+    CT_POWER_LIMITS,
     CT_EFFICIENCY,
     CT_SATURATION,
     CT_CLOUD,
@@ -684,7 +686,7 @@ function ct002OptionalBlocks(ct: { fields: Fields } | undefined): string[] {
   }
   // MIN_DC_OUTPUT is a per-battery knob in the UI, but its ESPHome key lives
   // under the same `balancer:` block.
-  for (const fld of CT_DC_KEEPALIVE) {
+  for (const fld of [...CT_DC_KEEPALIVE, ...CT_POWER_LIMITS]) {
     if (!isBlank(ctVal(fld.key))) bal.push(`${fld.ey}: ${ctVal(fld.key)}`);
   }
   for (const fld of CT_EFFICIENCY) {
@@ -1026,6 +1028,10 @@ export function generateHomeAssistant(state: State): string {
   add("min_efficient_power", ctf.MIN_EFFICIENT_POWER);
   add("efficiency_rotation_interval", ctf.EFFICIENCY_ROTATION_INTERVAL);
   add("min_dc_output", ctf.MIN_DC_OUTPUT);
+  add("min_charge_power", ctf.MIN_CHARGE_POWER);
+  add("min_discharge_power", ctf.MIN_DISCHARGE_POWER);
+  add("max_charge_power", ctf.MAX_CHARGE_POWER);
+  add("max_discharge_power", ctf.MAX_DISCHARGE_POWER);
   // Probe window / stall escape for the efficiency rotation (the "saturation"
   // group); same 1:1 lower-cased mapping.
   add("saturation_grace_seconds", ctf.SATURATION_GRACE_SECONDS);

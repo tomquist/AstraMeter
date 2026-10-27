@@ -185,6 +185,7 @@ void write_consumer_balancer(JsonWriter &json, const BalancerConsumerSnapshot &s
   json.set("saturation_grace_remaining_s", state.saturation_grace_remaining, 1);
   json.set("fade_weight", state.fade_weight, 3);
   json.set("deprioritized", state.deprioritized);
+  json.set("min_power_idle", state.min_power_idle);
   json.begin_object("pace");
   json.set("cap_w", static_cast<double>(state.pace_cap), 1);
   json.set("sign", static_cast<long long>(state.pace_sign));
@@ -228,6 +229,10 @@ void write_consumer(JsonWriter &json, const ConsumerStatus &consumer) {
            static_cast<double>(consumer.efficiency_window_weight_pct), 1);
   json.set("min_dc_output_w", consumer.min_dc_output_w, 1);
   json.set("min_dc_output_applicable", consumer.min_dc_output_applicable);
+  json.set("min_charge_power_w", static_cast<double>(consumer.min_charge_power_w), 1);
+  json.set("min_discharge_power_w", static_cast<double>(consumer.min_discharge_power_w), 1);
+  json.set("max_charge_power_w", static_cast<double>(consumer.max_charge_power_w), 1);
+  json.set("max_discharge_power_w", static_cast<double>(consumer.max_discharge_power_w), 1);
   if (consumer.balancer.has_value()) write_consumer_balancer(json, *consumer.balancer);
   json.end_object();
 }

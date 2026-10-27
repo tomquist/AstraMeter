@@ -8,6 +8,7 @@ import {
   CT_BASIC,
   CT_CLOUD,
   CT_DC_KEEPALIVE,
+  CT_POWER_LIMITS,
   CT_EFFICIENCY,
   CT_SATURATION,
   PER_METER_TUNING,
@@ -66,6 +67,7 @@ const ha = generateConfigIni({
       BALANCE_GAIN: "0.3",
       ACTIVE_CONTROL: "True",
       PEAKSHAVING_THRESHOLD: "2500",
+      MIN_DISCHARGE_POWER: "50",
       CLOUD_REPORTING: "True",
       CLOUD_REPORTING_INTERVAL: "30",
     },
@@ -80,6 +82,8 @@ has(ha, "PID_KP = 0.5", "ha: pid");
 has(ha, "[CT002]", "ha: CT002 section emitted");
 has(ha, "CT_MAC = 001122334455", "ha: ct mac");
 has(ha, "PEAKSHAVING_THRESHOLD = 2500", "ha: peak shaving threshold");
+has(ha, "MIN_DISCHARGE_POWER = 50", "ha: min discharge power");
+lacks(ha, "MAX_DISCHARGE_POWER", "ha: an unset maximum is left out (no limit)");
 has(ha, "BALANCE_GAIN = 0.3", "ha: balancer option");
 has(ha, "CLOUD_REPORTING = True", "ha: cloud reporting on");
 has(ha, "CLOUD_REPORTING_INTERVAL = 30", "ha: cloud reporting interval");
@@ -298,6 +302,8 @@ const eyHa = generateEsphome({
   ct: {
     fields: {
       BALANCE_GAIN: "0.3",
+      MIN_DISCHARGE_POWER: "50",
+      MAX_CHARGE_POWER: "600",
       CLOUD_REPORTING: "True",
       CLOUD_REPORTING_HOST: "eu.hamedata.com",
       CLOUD_REPORTING_INTERVAL: "30",
@@ -318,6 +324,8 @@ has(eyHa, "power_sensor_l3: grid_l3", "esp/ha: 3-phase wiring");
 has(eyHa, "- offset: -20", "esp/ha: offset filter on sensor");
 has(eyHa, "ct_type: HME-4", "esp/ha: ct_type");
 has(eyHa, "balance_gain: 0.3", "esp/ha: balancer sub-block");
+has(eyHa, "min_discharge_power: 50", "esp/ha: min discharge power in the balancer sub-block");
+has(eyHa, "max_charge_power: 600", "esp/ha: max charge power in the balancer sub-block");
 // a single offset must apply to all three phase sensors, not just L1
 ok((eyHa.match(/- offset: -20/g) || []).length === 3, "esp/ha: single offset applied to all 3 phases");
 
@@ -694,6 +702,10 @@ const haOpts = generateHomeAssistant({
     fields: {
       CT_MAC: "abc123",
       MIN_DC_OUTPUT: "30",
+      MIN_DISCHARGE_POWER: "50",
+      MIN_CHARGE_POWER: "40",
+      MAX_DISCHARGE_POWER: "800",
+      MAX_CHARGE_POWER: "0",
       ACTIVE_CONTROL: "False",
       PEAKSHAVING_THRESHOLD: "2500",
       CLOUD_REPORTING: "True",
@@ -721,6 +733,10 @@ has(haOpts, "ct_mac: \"abc123\"", "ha-opts: ct mac");
 has(haOpts, "active_control: false", "ha-opts: active control off");
 has(haOpts, "peakshaving_threshold: 2500", "ha-opts: peak shaving threshold");
 has(haOpts, "min_dc_output: 30", "ha-opts: min dc output");
+has(haOpts, "min_discharge_power: 50", "ha-opts: min discharge power");
+has(haOpts, "min_charge_power: 40", "ha-opts: min charge power");
+has(haOpts, "max_discharge_power: 800", "ha-opts: max discharge power");
+has(haOpts, "max_charge_power: 0", "ha-opts: max charge power (explicit 0 kept)");
 has(haOpts, "grid_predict_trust: 0.7", "ha-opts: grid predict trust");
 has(haOpts, "fair_distribution: false", "ha-opts: fair distribution off");
 has(haOpts, "balance_gain: 0.3", "ha-opts: balance gain");
@@ -753,6 +769,8 @@ lacks(haMin, "hampel_window", "ha-opts: omits unset hampel");
 lacks(haMin, "pid_kp", "ha-opts: omits unset pid");
 lacks(haMin, "deadband", "ha-opts: omits unset deadband");
 lacks(haMin, "min_dc_output", "ha-opts: omits unset min dc output");
+lacks(haMin, "min_discharge_power", "ha-opts: omits unset min discharge power");
+lacks(haMin, "max_discharge_power", "ha-opts: omits an unset maximum (no limit)");
 lacks(haMin, "active_control", "ha-opts: omits default active control");
 lacks(haMin, "pace_base_step", "ha-opts: omits unset pace base step");
 lacks(haMin, "grid_predict_trust", "ha-opts: omits unset grid predict trust");
@@ -1126,6 +1144,7 @@ has(haDashReadOnly, "dashboard_allow_write: false", "ha-opts: read-only dashboar
     ...CT_ACTIVE,
     ...CT_BALANCER,
     ...CT_DC_KEEPALIVE,
+    ...CT_POWER_LIMITS,
     ...CT_EFFICIENCY,
     ...CT_SATURATION,
     ...CT_CLOUD,

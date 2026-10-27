@@ -71,6 +71,12 @@ bool is_device_button(const std::string &field);
 /// PEAKSHAVING_THRESHOLD_MAX in `src/astrameter/ct002/controls.py`.
 constexpr float PEAKSHAVING_THRESHOLD_MAX = 10000.0f;
 
+/// Upper bound of a per-battery power setting, in W: the most a three-phase
+/// connection on the default 16 A fuse can carry (3 x 230 V x 16 A); a
+/// maximum charge / discharge power at this bound is no limit at all. Mirrors
+/// BATTERY_POWER_MAX in `src/astrameter/ct002/controls.py`.
+constexpr float BATTERY_POWER_MAX = 3.0f * 230.0f * 16.0f;
+
 /// Whether *field* is a device-wide setting that takes a number.
 bool is_device_number(const std::string &field);
 

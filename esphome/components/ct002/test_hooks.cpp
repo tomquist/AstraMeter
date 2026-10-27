@@ -106,6 +106,10 @@ bool CT002Component::apply_cfg_(const std::string &key, double v) {
   else if (key == "efficiency_saturation_threshold")
     this->balancer_cfg_.efficiency_saturation_threshold = f;
   else if (key == "min_dc_output") this->balancer_cfg_.min_dc_output = f;
+  else if (key == "min_charge_power") this->balancer_cfg_.min_charge_power = f;
+  else if (key == "min_discharge_power") this->balancer_cfg_.min_discharge_power = f;
+  else if (key == "max_charge_power") this->balancer_cfg_.max_charge_power = f;
+  else if (key == "max_discharge_power") this->balancer_cfg_.max_discharge_power = f;
   // Saturation tracker fields.
   else if (key == "saturation_enabled") this->saturation_enabled_ = (v != 0.0);
   else if (key == "saturation_alpha") this->saturation_alpha_ = f;

@@ -67,6 +67,10 @@ DESTINATIONS = {
     ),
     "efficiency_demand_alpha": lambda ct002: _cfg(ct002).efficiency_demand_alpha,
     "min_dc_output": lambda ct002: _cfg(ct002).min_dc_output,
+    "min_charge_power": lambda ct002: _cfg(ct002).min_charge_power,
+    "min_discharge_power": lambda ct002: _cfg(ct002).min_discharge_power,
+    "max_charge_power": lambda ct002: _cfg(ct002).max_charge_power,
+    "max_discharge_power": lambda ct002: _cfg(ct002).max_discharge_power,
     # Saturation tracking.
     "saturation_detection": lambda ct002: _saturation(ct002)._enabled,
     "saturation_alpha": lambda ct002: _saturation(ct002)._alpha,

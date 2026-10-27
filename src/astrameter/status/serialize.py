@@ -119,6 +119,7 @@ def _balancer_consumer_to_wire(
             ),
             "fade_weight": round_or_none(state.fade_weight, 3),
             "deprioritized": state.deprioritized,
+            "min_power_idle": state.min_power_idle,
             "pace": compact(
                 {
                     "cap_w": round_or_none(state.pace_cap),
@@ -187,6 +188,10 @@ def consumer_to_wire(consumer: ConsumerSnapshot) -> dict[str, Any]:
             ),
             "min_dc_output_w": round_or_none(consumer.min_dc_output),
             "min_dc_output_applicable": consumer.min_dc_output_applicable,
+            "min_charge_power_w": round_or_none(consumer.min_charge_power),
+            "min_discharge_power_w": round_or_none(consumer.min_discharge_power),
+            "max_charge_power_w": round_or_none(consumer.max_charge_power),
+            "max_discharge_power_w": round_or_none(consumer.max_discharge_power),
             "balancer": _balancer_consumer_to_wire(consumer.balancer),
         }
     )
@@ -302,6 +307,10 @@ _UNIT_SUFFIX = {
     "min_efficient_power": "_w",
     "probe_min_power": "_w",
     "min_dc_output": "_w",
+    "min_charge_power": "_w",
+    "min_discharge_power": "_w",
+    "max_charge_power": "_w",
+    "max_discharge_power": "_w",
     "efficiency_rotation_interval": "_s",
 }
 
@@ -369,6 +378,14 @@ def ct002_to_wire(device: CT002Snapshot) -> dict[str, Any]:
                             override.efficiency_window_weight, 3
                         ),
                         "min_dc_output_w": round_or_none(override.min_dc_output),
+                        "min_charge_power_w": round_or_none(override.min_charge_power),
+                        "min_discharge_power_w": round_or_none(
+                            override.min_discharge_power
+                        ),
+                        "max_charge_power_w": round_or_none(override.max_charge_power),
+                        "max_discharge_power_w": round_or_none(
+                            override.max_discharge_power
+                        ),
                     }
                 )
                 for cid, override in device.orphan_overrides

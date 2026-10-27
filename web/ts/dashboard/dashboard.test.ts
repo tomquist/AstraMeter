@@ -181,6 +181,10 @@ ok(batteryHealth({ expired: true }).severity === "err", "an expired battery is a
 ok(batteryHealth({ active: false }).severity === "idle", "a disabled battery is idle");
 ok(batteryHealth({ manual_enabled: true }).severity === "warn", "manual is a warning");
 ok(
+  batteryHealth({ balancer: { min_power_idle: true } }).label === "Below minimum",
+  "a battery idling below its minimum power says so",
+);
+ok(
   batteryHealth({ balancer: { saturation: 0.9 } }).severity === "warn",
   "a saturated battery warns",
 );
@@ -1145,6 +1149,10 @@ const controllable: StatusSnapshot = {
           efficiency_window_weight_pct: 60,
           min_dc_output_w: 80,
           min_dc_output_applicable: true,
+          min_discharge_power_w: 50,
+          min_charge_power_w: 0,
+          max_discharge_power_w: 800,
+          max_charge_power_w: 11040,
         },
       ],
     },
@@ -1163,6 +1171,11 @@ has(ctrlHtml, "Automatic target", "the auto/manual switch is offered");
 has(ctrlHtml, 'min="0" max="10" step="0.1"', "distribution weight keeps the MQTT range");
 has(ctrlHtml, 'min="0" max="100" step="5"', "efficiency window keeps the MQTT range");
 has(ctrlHtml, 'min="0" max="1000" step="1"', "min DC output keeps the MQTT range");
+has(ctrlHtml, 'aria-label="Min discharge"', "min discharge power is offered");
+has(ctrlHtml, 'aria-label="Min charge"', "min charge power is offered");
+has(ctrlHtml, 'aria-label="Max discharge"', "max discharge power is offered");
+has(ctrlHtml, 'aria-label="Max charge"', "max charge power is offered");
+has(ctrlHtml, 'min="0" max="11040" step="1"', "min charge/discharge keep the MQTT range");
 has(ctrlHtml, "60%", "the slider shows its value");
 
 // Conditional visibility must match when the MQTT entity is published.
@@ -1188,6 +1201,7 @@ const acHtml = renderToString(
   h("div", null, ...view({ ...ctrlState, snapshot: acOnly }, actions, initialConfigState())),
 );
 lacks(acHtml, 'aria-label="Min DC output"', "no DC floor on an AC-only battery");
+has(acHtml, 'aria-label="Min discharge"', "every battery has a minimum discharge");
 
 // A battery on automatic must not show a manual setpoint box.
 const manual: StatusSnapshot = {

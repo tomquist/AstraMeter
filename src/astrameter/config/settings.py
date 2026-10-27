@@ -188,6 +188,14 @@ class CtSettings:
     efficiency_saturation_threshold: float = 0.4
     efficiency_demand_alpha: float = 0.1
     min_dc_output: float = 0.0
+    # Below these a battery idles at 0 W instead of charging / discharging at a
+    # few watts; a battery's own setting overrides them. 0 = no minimum.
+    min_charge_power: float = 0.0
+    min_discharge_power: float = 0.0
+    # The most a battery is asked to charge / discharge; a battery's own
+    # setting overrides them. ``None`` = no limit, 0 = not in that direction.
+    max_charge_power: float | None = None
+    max_discharge_power: float | None = None
 
 
 @dataclass(frozen=True)

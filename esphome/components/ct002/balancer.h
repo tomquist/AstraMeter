@@ -260,6 +260,19 @@ struct BalancerConfig {
   // Minimum net discharge (W) to keep an external-inverter DC battery awake.
   // 0 disables. See issue #425 and balancer.py.
   float min_dc_output{0.0f};
+  // Minimum charge / discharge (W) a battery runs at (issue #721): below it the
+  // battery idles at 0 W and the others, or the grid, cover its share. A
+  // battery's own setting (ConsumerReport) overrides these. 0 disables. See
+  // balancer.py _below_min_power.
+  float min_charge_power{0.0f};
+  float min_discharge_power{0.0f};
+  // Maximum charge / discharge (W) a battery is asked for: its command is
+  // capped there and the others, or the grid, take the rest. Unset (or
+  // BATTERY_POWER_MAX and above) is no limit; 0 keeps the battery out of that
+  // direction. A battery's own setting (ConsumerReport) overrides these. See
+  // balancer.py _max_power.
+  std::optional<float> max_charge_power{};
+  std::optional<float> max_discharge_power{};
   // Adaptive grid-state predictor: act on a predicted grid that credits the
   // pool's freshly-reported output between meter refreshes and trusts each
   // fresh meter sample by an online-learned amount, compensating for meter
@@ -342,6 +355,9 @@ struct BalancerConsumerState {
   float ceiling_run_anchor{0.0f};
   double ceiling_run_since{0.0};
   int ceiling_run_polls{0};
+  // Idling at 0 W because its share fell below its minimum charge / discharge
+  // power (see below_min_power_); it resumes only past the hysteresis.
+  bool min_power_idle{false};
 
   // Learned ceiling in direction *sign* (+ discharge), 0 if none.
   float ceiling(int sign) const {
@@ -372,6 +388,7 @@ struct BalancerConsumerSnapshot {
   int pace_sign{0};
   float osc_score{0.0f};
   int osc_last_sign{0};
+  bool min_power_idle{false};
 };
 
 struct PredictorSnapshot {
@@ -437,6 +454,14 @@ struct ConsumerReport {
   // Mirrors the Python reports dict's "min_dc_output" key. Default-initialized
   // so aggregate ``ConsumerReport{...}`` init stays warning-clean.
   std::optional<float> min_dc_output{};
+  // Per-device MIN_CHARGE_POWER / MIN_DISCHARGE_POWER overrides (W); unset =
+  // inherit the global setting. Mirror the Python ConsumerReport fields.
+  std::optional<float> min_charge_power{};
+  std::optional<float> min_discharge_power{};
+  // Per-device MAX_CHARGE_POWER / MAX_DISCHARGE_POWER overrides (W); unset =
+  // inherit, BATTERY_POWER_MAX or more = no limit.
+  std::optional<float> max_charge_power{};
+  std::optional<float> max_discharge_power{};
 };
 
 using ReportMap = std::unordered_map<std::string, ConsumerReport>;
@@ -633,10 +658,18 @@ class LoadBalancer {
   int ceiling_retest_(const std::optional<std::string> &consumer_id, const ReportMap &reports,
                       const std::unordered_map<std::string, float> &eff_part,
                       float control_grid) const;
-  // Learned ceilings of *ids* in direction *sign*, where one is known. Mirrors
-  // balancer.py _ceilings.
+  // Ceilings of *ids* in direction *sign*, where one is known: the lower of a
+  // learned ceiling and the battery's maximum. Mirrors balancer.py _ceilings.
   template<typename Ids>
-  std::unordered_map<std::string, float> ceilings_(const Ids &ids, int sign) const;
+  std::unordered_map<std::string, float> ceilings_(const ReportMap &reports, const Ids &ids,
+                                                   int sign) const;
+  // The most *report*'s battery is asked for in direction *sign* (W), unset
+  // for no limit. Mirrors balancer.py _max_power.
+  std::optional<float> max_power_(const ConsumerReport &report, int sign) const;
+  // The ceiling *consumer_id* has in direction *sign*: the lower of its
+  // maximum and its learned ceiling. Mirrors balancer.py _limit.
+  std::optional<float> limit_(const ReportMap &reports, const std::string &consumer_id,
+                              int sign) const;
   // Consumers of *ids* already at their ceiling in direction *sign*. Mirrors
   // balancer.py _pinned.
   std::unordered_set<std::string> pinned_(const ReportMap &reports,
@@ -672,6 +705,15 @@ class LoadBalancer {
                                             const ReportMap &reports,
                                             std::array<float, 3> result);
 
+  // The least *report*'s battery may run at in direction *sign* (W); 0 = none.
+  // Mirrors balancer.py _min_power.
+  float min_power_(const ConsumerReport &report, int sign) const;
+  // The batteries that idle because their share is below their minimum, and
+  // each battery's min_power_idle updated. Mirrors balancer.py _below_min_power.
+  std::unordered_set<std::string> below_min_power_(
+      const ReportMap &reports, float demand_grid,
+      const std::unordered_map<std::string, float> &eff_part, bool exempt_spilling);
+
   std::array<float, 3> steer_to_zero_(const std::optional<std::string> &consumer_id,
                                       const ReportMap &reports, bool paced = false);
   // Turn an absolute net-output target into the phase vector to send: the tail
@@ -680,7 +722,9 @@ class LoadBalancer {
   // last_intent / last_intent_reading) and splits the scalar across phases.
   // *single_phase* puts the whole reading on that one phase instead of the
   // weighted split_by_phase_; *last_target* and *intent_reading* override what
-  // is recorded, for the steer-to-zero path. Mirrors balancer.py _emit.
+  // is recorded, for the steer-to-zero path. *desired* is capped at the
+  // battery's maximum first unless *limited* is false (a manual target).
+  // Mirrors balancer.py _emit.
   std::array<float, 3> emit_(const std::optional<std::string> &consumer_id,
                              NetOutputW desired, float reported,
                              const ReportMap &reports,
@@ -688,7 +732,8 @@ class LoadBalancer {
                              bool pace = false,
                              const std::string *single_phase = nullptr,
                              std::optional<float> last_target = std::nullopt,
-                             std::optional<float> intent_reading = std::nullopt);
+                             std::optional<float> intent_reading = std::nullopt,
+                             bool limited = true);
   static std::array<float, 3> split_by_phase_(
       float target, const ReportMap &reports,
       const std::unordered_map<std::string, float> *weights = nullptr);

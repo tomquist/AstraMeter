@@ -66,16 +66,21 @@ def _percentile(values: Sequence[float], pct: float) -> float:
     return ordered[lo] + (ordered[hi] - ordered[lo]) * (k - lo)
 
 
-def _policy_target(threshold: float, net_w: float) -> float:
+def _policy_target(threshold: float, net_w: float, min_discharge: float = 0.0) -> float:
     """The grid (W) the controller is asked to hold for a net house demand.
 
     0 for self-consumption.  Under peak shaving (*threshold* > 0) the batteries
     only cover demand above the threshold and charge from surplus, so the grid
     should carry the demand itself up to the threshold, and nothing on surplus.
+    With a minimum discharge (*min_discharge* > 0) the batteries idle when what
+    is left for them is below it, so the grid carries all of it.  The
+    hysteresis above the minimum is not modelled: the resume band is scored
+    against the battery covering it.
     """
-    if threshold <= 0:
-        return 0.0
-    return min(max(net_w, 0.0), threshold)
+    target = 0.0 if threshold <= 0 else min(max(net_w, 0.0), threshold)
+    if 0.0 < net_w - target < min_discharge:
+        return net_w
+    return target
 
 
 Error = Callable[[_Sample], float]
@@ -84,9 +89,10 @@ Error = Callable[[_Sample], float]
 def _tracking_error(scenario: Scenario) -> Error:
     """Per-sample distance of the grid from its policy target (W)."""
     threshold = scenario.peakshaving_threshold
-    if threshold <= 0:
+    minimum = scenario.min_discharge_power
+    if threshold <= 0 and minimum <= 0:
         return lambda s: s.grid
-    return lambda s: s.grid - _policy_target(threshold, s.consumption)
+    return lambda s: s.grid - _policy_target(threshold, s.consumption, minimum)
 
 
 def _settle_time(
@@ -152,6 +158,7 @@ def _oracle_dispatch(scenario: Scenario, samples: list[_Sample]) -> tuple[float,
     max_discharge = sum(s.max_discharge_power for s in specs)
     energy_wh = sum(s.initial_soc * s.capacity_wh for s in specs)
     threshold = scenario.peakshaving_threshold
+    minimum = scenario.min_discharge_power
     import_wh = export_wh = 0.0
     for prev, _cur, dt in _intervals(samples):
         h = dt / 3600.0
@@ -164,7 +171,7 @@ def _oracle_dispatch(scenario: Scenario, samples: list[_Sample]) -> tuple[float,
         if lo > hi:  # DC inflow exceeds what a full pack can shed via the inverter
             lo = hi  # → curtail the excess (output at the cap)
         # Reach the target if feasible, else store/shed.
-        p = min(max(net - _policy_target(threshold, net), lo), hi)
+        p = min(max(net - _policy_target(threshold, net, minimum), lo), hi)
         energy_wh = max(0.0, min(cap_wh, energy_wh + (dc - p) * h))
         grid = net - p
         if grid > 0:

@@ -55,6 +55,8 @@ export interface BalancerConsumer {
   saturation_grace_remaining_s?: number;
   fade_weight?: number; // 0..1
   deprioritized?: boolean;
+  /** Idling at 0 W: its share is below its minimum charge / discharge power. */
+  min_power_idle?: boolean;
   pace?: { cap_w?: number; sign?: number };
   oscillation?: { score?: number; last_sign?: number };
 }
@@ -92,6 +94,12 @@ export interface ConsumerStatus {
   efficiency_window_weight_pct?: number; // 0..100, same unit as the MQTT entity
   min_dc_output_w?: number;
   min_dc_output_applicable?: boolean;
+  /** In effect for this battery: its own setting, else the global one. */
+  min_charge_power_w?: number;
+  min_discharge_power_w?: number;
+  /** BATTERY_POWER_MAX (11040) when the battery has no limit. */
+  max_charge_power_w?: number;
+  max_discharge_power_w?: number;
   balancer?: BalancerConsumer;
 }
 

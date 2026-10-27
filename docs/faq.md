@@ -277,6 +277,26 @@ the battery is still turning down. Nor can it prevent export while the battery
 is full or already charging as fast as it can: AstraMeter has no control over
 your solar panels.
 
+### My battery covers a tiny standby load at poor efficiency. Can it stay off instead?
+
+A: Yes, with `MIN_DISCHARGE_POWER` in `[CT002]` or `[CT003]` (`min_discharge_power`
+in the ESPHome `balancer:` block). Below this many watts of demand the battery
+stays at 0 W and the grid supplies the house; above it, the battery covers
+everything as before. For example, `MIN_DISCHARGE_POWER = 50` lets a 20 W night
+standby come from the grid. It only starts again once its share is 20% above
+the minimum, so a load hovering at 50 W doesn't switch it on and off. Each
+battery can also have its own value in Home Assistant or on the dashboard. See
+[Minimum charge and discharge power](ct002.md#minimum-charge-and-discharge-power).
+
+### Can I limit how fast a battery charges or discharges, or stop it charging for a while?
+
+A: Yes, with `MAX_CHARGE_POWER` and `MAX_DISCHARGE_POWER` in `[CT002]` or
+`[CT003]`, or per battery from Home Assistant or the dashboard. The other
+batteries, or the grid, take the rest. `0` keeps a battery out of that
+direction, for example to hold its charge level until a cheaper tariff, and
+the per-battery entities can be changed by an automation. See
+[Maximum charge and discharge power](ct002.md#maximum-charge-and-discharge-power).
+
 ### Should I use Shelly emulation or CT002/CT003?
 
 A: CT002/CT003 (set `DEVICE_TYPE = ct002` or `ct003`). Each battery reports its
@@ -865,7 +885,9 @@ or settings. This means:
 - AstraMeter can't set charge or discharge limits or a backup SoC. Set these
   in the Marstek app or in the battery's own integration. When a battery can't
   deliver its share because it is full, empty or at a limit, AstraMeter gives
-  that share to the other batteries.
+  that share to the other batteries. AstraMeter can ask a battery for less
+  than its own limit, though: see
+  [Maximum charge and discharge power](ct002.md#maximum-charge-and-discharge-power).
 
 With [MQTT Insights](mqtt-insights.md), Home Assistant receives each battery's
 reported power, phase and target. For SoC and battery settings, use an

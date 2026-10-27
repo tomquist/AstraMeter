@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Added** a minimum and maximum charge and discharge power per battery, so a battery stays idle instead of running at a few watts where it is least efficient, or is held below a limit you can change live. Set `MIN_*_POWER` / `MAX_*_POWER`, or per battery in Home Assistant ([#721](https://github.com/tomquist/astrameter/issues/721), [#752](https://github.com/tomquist/astrameter/pull/752)).
+
 - **Fixed** the ESP32 build with MQTT Insights restarting itself while the MQTT broker kept dropping the connection; the meter now keeps answering the batteries through the drops ([#748](https://github.com/tomquist/astrameter/pull/748)).
 
 - **Fixed** the Marstek app being told firmware version 148 for the emulated CT002/CT003 over MQTT; it now gets the same version a real one reports, 124 for CT002 and 122 for CT003 ([#749](https://github.com/tomquist/astrameter/pull/749)).
