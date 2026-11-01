@@ -183,6 +183,8 @@ ct002:
   #   min_power_hysteresis: 20     # an idle battery starts again this many W above its minimum; unset = +20%
   #   max_charge_power: 800        # most a battery charges at; unset = no limit, 0 = never
   #   max_discharge_power: 800     # most a battery discharges at; unset = no limit, 0 = never
+  #   min_efficient_charge_power: 1200    # min_efficient_power while charging; unset = min_efficient_power, 0 = off
+  #   min_efficient_discharge_power: 375  # min_efficient_power while discharging; unset = min_efficient_power, 0 = off
 
   # Saturation tracker (detects a battery that can't follow its target and
   # backs off). Runs by default with these values; shown at defaults.

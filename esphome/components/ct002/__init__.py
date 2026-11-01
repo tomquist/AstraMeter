@@ -135,6 +135,8 @@ CONF_OSC_DAMP_ALPHA = "osc_damp_alpha"
 CONF_OSC_DAMP_DECAY = "osc_damp_decay"
 CONF_OSC_DAMP_THRESHOLD = "osc_damp_threshold"
 CONF_MIN_EFFICIENT_POWER = "min_efficient_power"
+CONF_MIN_EFFICIENT_CHARGE_POWER = "min_efficient_charge_power"
+CONF_MIN_EFFICIENT_DISCHARGE_POWER = "min_efficient_discharge_power"
 CONF_PROBE_MIN_POWER = "probe_min_power"
 CONF_EFFICIENCY_ROTATION_INTERVAL = "efficiency_rotation_interval"
 CONF_EFFICIENCY_FADE_ALPHA = "efficiency_fade_alpha"
@@ -589,6 +591,9 @@ BALANCER_SCHEMA = cv.Schema(
         ),
         cv.Optional(CONF_OSC_DAMP_THRESHOLD, default=300.0): cv.float_range(min=0.0),
         cv.Optional(CONF_MIN_EFFICIENT_POWER, default=0.0): cv.float_range(min=0.0),
+        # Unset = min_efficient_power; 0 = no efficiency rotation that way.
+        cv.Optional(CONF_MIN_EFFICIENT_CHARGE_POWER): cv.float_range(min=0.0),
+        cv.Optional(CONF_MIN_EFFICIENT_DISCHARGE_POWER): cv.float_range(min=0.0),
         cv.Optional(CONF_PROBE_MIN_POWER, default=80.0): cv.float_range(min=0.0),
         cv.Optional(
             CONF_EFFICIENCY_ROTATION_INTERVAL, default="15min"
@@ -1301,21 +1306,26 @@ async def to_code(config):
         ("concentrate_deadband", bal.get(CONF_CONCENTRATE_DEADBAND, 60.0)),
         ("import_trim_w", bal.get(CONF_IMPORT_TRIM_W, 15.0)),
     ]
-    # Unset = the default start point / no limit: the C++ fields are
-    # std::optional and stay empty. They follow min_discharge_power, since
-    # designated initializers must keep the struct's declaration order.
-    at = 1 + next(
-        i for i, (k, _) in enumerate(bcfg_fields) if k == "min_discharge_power"
-    )
-    bcfg_fields[at:at] = [
-        (key, bal[key])
-        for key in (
-            CONF_MIN_POWER_HYSTERESIS,
-            CONF_MAX_CHARGE_POWER,
-            CONF_MAX_DISCHARGE_POWER,
-        )
-        if key in bal
-    ]
+    # Unset = the fallback / default start point / no limit: the C++ fields
+    # are std::optional and stay empty. Each group goes right after the field
+    # it follows in the struct, since designated initializers must keep the
+    # struct's declaration order.
+    for after, keys in (
+        (
+            "min_efficient_power",
+            (CONF_MIN_EFFICIENT_CHARGE_POWER, CONF_MIN_EFFICIENT_DISCHARGE_POWER),
+        ),
+        (
+            "min_discharge_power",
+            (
+                CONF_MIN_POWER_HYSTERESIS,
+                CONF_MAX_CHARGE_POWER,
+                CONF_MAX_DISCHARGE_POWER,
+            ),
+        ),
+    ):
+        at = 1 + next(i for i, (k, _) in enumerate(bcfg_fields) if k == after)
+        bcfg_fields[at:at] = [(key, bal[key]) for key in keys if key in bal]
     bcfg = cg.StructInitializer(BalancerConfig, *bcfg_fields)
     cg.add(var.set_balancer_config(bcfg))
 

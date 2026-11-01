@@ -306,6 +306,8 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         "SATURATION_ALPHA": {"type": "float", "min": 0, "max": 1},
         "MIN_TARGET_FOR_SATURATION": {"type": "integer"},
         "MIN_EFFICIENT_POWER": {"type": "integer"},
+        "MIN_EFFICIENT_CHARGE_POWER": {"type": "float", "min": 0},
+        "MIN_EFFICIENT_DISCHARGE_POWER": {"type": "float", "min": 0},
         "EFFICIENCY_ROTATION_INTERVAL": {"type": "integer"},
         "PROBE_MIN_POWER": {"type": "integer"},
         "EFFICIENCY_FADE_ALPHA": {"type": "float", "min": 0, "max": 1},

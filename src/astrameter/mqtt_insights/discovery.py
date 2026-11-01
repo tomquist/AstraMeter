@@ -383,8 +383,9 @@ def build_ct002_consumer_discovery(
     # the batteries ahead cannot; intermediate values give it proportionally
     # less active time while low demand runs one battery at a time.
     # Surfaced as a percentage; the internal value is a 0-1 fraction.  Only
-    # meaningful when efficiency rotation is enabled (``min_efficient_power >
-    # 0``); without it every battery stays active, so don't surface the entity.
+    # meaningful when efficiency rotation is enabled in either direction
+    # (``min_efficient_power``, or its charge / discharge override, above 0);
+    # without it every battery stays active, so don't surface the entity.
     if efficiency_rotation:
         components["efficiency_window_weight"] = number(
             "efficiency_window_weight",
@@ -668,8 +669,9 @@ def build_ct002_device_discovery(
     }
 
     # The Force Rotation button only does anything when efficiency rotation is
-    # enabled (``min_efficient_power > 0``); without it the balancer keeps every
-    # battery active and there's nothing to rotate, so don't surface the button.
+    # enabled in either direction (``BalancerConfig.efficiency_enabled``);
+    # without it the balancer keeps every battery active and there's nothing to
+    # rotate, so don't surface the button.
     if efficiency_rotation:
         components["force_rotation"] = {
             "platform": "button",

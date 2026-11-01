@@ -178,6 +178,35 @@ TEST(SaturationTrackerDcFloor, FloorPrefersEvidenceOverTheNominalFigure) {
   EXPECT_FLOAT_EQ(saturation_floor(state, report, 0.0f), 0.0f);
 }
 
+// Separate charge / discharge efficiency thresholds (issue #642). Mirrors
+// tests/test_balancer_efficiency_direction.py's configuration cases.
+TEST(BalancerConfig, EfficientPowerFallsBackPerDirection) {
+  BalancerConfig cfg;
+  cfg.min_efficient_power = 375.0f;
+  EXPECT_FLOAT_EQ(cfg.efficient_power(1), 375.0f);
+  EXPECT_FLOAT_EQ(cfg.efficient_power(-1), 375.0f);
+  cfg.min_efficient_charge_power = 1200.0f;
+  EXPECT_FLOAT_EQ(cfg.efficient_power(-1), 1200.0f);
+  EXPECT_FLOAT_EQ(cfg.efficient_power(1), 375.0f);
+  cfg.min_efficient_discharge_power = 0.0f;
+  EXPECT_FLOAT_EQ(cfg.efficient_power(1), 0.0f);
+  EXPECT_TRUE(cfg.efficiency_enabled());
+}
+
+TEST(BalancerConfig, EfficiencyEnabledInEitherDirection) {
+  BalancerConfig cfg;
+  EXPECT_FALSE(cfg.efficiency_enabled());
+  cfg.min_efficient_charge_power = 1200.0f;
+  EXPECT_TRUE(cfg.efficiency_enabled());
+  cfg.min_efficient_power = 375.0f;
+  cfg.min_efficient_charge_power = 0.0f;
+  cfg.min_efficient_discharge_power = 0.0f;
+  EXPECT_FALSE(cfg.efficiency_enabled());
+  cfg.min_efficient_discharge_power = -5.0f;
+  cfg.clamp();
+  EXPECT_FLOAT_EQ(*cfg.min_efficient_discharge_power, 0.0f);
+}
+
 TEST(LoadBalancer, InactiveSteersConsumerOutputToZero) {
   auto b = make_balancer();
   ReportMap reports;

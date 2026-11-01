@@ -1026,6 +1026,8 @@ export function generateHomeAssistant(state: State): string {
   else if (ctf.ACTIVE_CONTROL === "False") add("active_control", false);
   add("peakshaving_threshold", ctf.PEAKSHAVING_THRESHOLD);
   add("min_efficient_power", ctf.MIN_EFFICIENT_POWER);
+  add("min_efficient_charge_power", ctf.MIN_EFFICIENT_CHARGE_POWER);
+  add("min_efficient_discharge_power", ctf.MIN_EFFICIENT_DISCHARGE_POWER);
   add("efficiency_rotation_interval", ctf.EFFICIENCY_ROTATION_INTERVAL);
   add("min_dc_output", ctf.MIN_DC_OUTPUT);
   add("min_charge_power", ctf.MIN_CHARGE_POWER);

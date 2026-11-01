@@ -70,6 +70,8 @@ double g_clock = 0.0;
 float g_min_charge = 0.0f, g_min_discharge = 0.0f;
 float g_max_charge = -1.0f, g_max_discharge = -1.0f;
 float g_hysteresis = -1.0f;
+// Per-direction efficiency thresholds; < 0 = unset (min_efficient_power).
+float g_eff_charge = -1.0f, g_eff_discharge = -1.0f;
 struct PowerOverride {
   float min_charge, min_discharge, max_charge, max_discharge;
 };
@@ -106,6 +108,8 @@ int main() {
       BalancerConfig cfg;
       cfg.fair_distribution = (fair != 0);
       cfg.min_efficient_power = min_eff;
+      if (g_eff_charge >= 0.0f) cfg.min_efficient_charge_power = g_eff_charge;
+      if (g_eff_discharge >= 0.0f) cfg.min_efficient_discharge_power = g_eff_discharge;
       cfg.efficiency_rotation_interval = rot;
       cfg.efficiency_saturation_threshold = sat_threshold;
       cfg.min_dc_output = min_dc;
@@ -181,6 +185,8 @@ int main() {
       in >> g_min_charge >> g_min_discharge;
     } else if (cmd == "hyst") {
       in >> g_hysteresis;
+    } else if (cmd == "effdir") {
+      in >> g_eff_charge >> g_eff_discharge;
     } else if (cmd == "maxpow") {
       in >> g_max_charge >> g_max_discharge;
     } else if (cmd == "override") {

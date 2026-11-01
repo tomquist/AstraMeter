@@ -302,8 +302,9 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
     // participation); 0 % makes it a backup that never leads but covers what
     // the batteries ahead cannot (the standby reserve). Surfaced as a
     // percentage; the internal value is a 0-1 fraction.
-    // Only meaningful when efficiency rotation is enabled (min_efficient_power >
-    // 0); without it every battery stays active, so don't surface the entity
+    // Only meaningful when efficiency rotation is enabled in either direction
+    // (min_efficient_power, or its charge / discharge override, above 0);
+    // without it every battery stays active, so don't surface the entity
     // (mirrors discovery.py).
     if (efficiency_rotation) {
       JsonObject eww = components["efficiency_window_weight"].to<JsonObject>();
@@ -547,9 +548,9 @@ std::pair<std::string, std::string> build_ct002_device_discovery(
     cqx["entity_category"] = "diagnostic";
 
     // The Force Rotation button only does anything when efficiency rotation is
-    // enabled (min_efficient_power > 0); without it every battery stays active
-    // and there's nothing to rotate, so don't surface the button (mirrors
-    // discovery.py).
+    // enabled in either direction (BalancerConfig::efficiency_enabled); without
+    // it every battery stays active and there's nothing to rotate, so don't
+    // surface the button (mirrors discovery.py).
     if (efficiency_rotation) {
       JsonObject fr = components["force_rotation"].to<JsonObject>();
       fr["platform"] = "button";

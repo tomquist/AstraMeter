@@ -98,6 +98,7 @@ def test_ct_settings_are_typed_values_not_strings() -> None:
             "active_control": False,
             "peakshaving_threshold": 2500,
             "min_efficient_power": 100,
+            "min_efficient_charge_power": 1200,
             "grid_predict_trust": 0.25,
             "fair_distribution": True,
             "import_trim_w": 12.5,
@@ -117,6 +118,8 @@ def test_ct_settings_are_typed_values_not_strings() -> None:
     assert ct.peakshaving_threshold == 2500.0
     assert isinstance(ct.peakshaving_threshold, float)
     assert ct.min_efficient_power == 100
+    assert ct.min_efficient_charge_power == 1200.0
+    assert ct.min_efficient_discharge_power is None
     assert ct.grid_predict_trust == 0.25
     assert ct.fair_distribution is True
     assert ct.import_trim_w == 12.5

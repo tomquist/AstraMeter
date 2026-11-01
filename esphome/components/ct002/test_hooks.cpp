@@ -100,6 +100,10 @@ bool CT002Component::apply_cfg_(const std::string &key, double v) {
   else if (key == "osc_damp_decay") this->balancer_cfg_.osc_damp_decay = f;
   else if (key == "osc_damp_threshold") this->balancer_cfg_.osc_damp_threshold = f;
   else if (key == "min_efficient_power") this->balancer_cfg_.min_efficient_power = f;
+  else if (key == "min_efficient_charge_power")
+    this->balancer_cfg_.min_efficient_charge_power = f;
+  else if (key == "min_efficient_discharge_power")
+    this->balancer_cfg_.min_efficient_discharge_power = f;
   else if (key == "probe_min_power") this->balancer_cfg_.probe_min_power = f;
   else if (key == "efficiency_rotation_interval") this->balancer_cfg_.efficiency_rotation_interval = f;
   else if (key == "efficiency_fade_alpha") this->balancer_cfg_.efficiency_fade_alpha = f;

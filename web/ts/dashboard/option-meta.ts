@@ -319,6 +319,23 @@ export const OPTION_META: Record<string, OptionMeta> = {
       "much, rather than running them all at a trickle. 0 keeps them all on.",
     placeholder: "0",
   },
+  min_efficient_charge_power: {
+    label: "Minimum efficient charge power (W)",
+    group: CONTROL,
+    help:
+      "The minimum efficient power while charging, e.g. 1200 to charge on " +
+      "one battery until the surplus reaches 1200 W. 0 keeps them all on " +
+      "while charging. Unlike the minimum charge power, one always runs.",
+    placeholder: "(minimum efficient power)",
+  },
+  min_efficient_discharge_power: {
+    label: "Minimum efficient discharge power (W)",
+    group: CONTROL,
+    help:
+      "The minimum efficient power while discharging. 0 keeps them all on " +
+      "while discharging. Unlike the minimum discharge power, one always runs.",
+    placeholder: "(minimum efficient power)",
+  },
   efficiency_rotation_interval: {
     label: "Rotation interval (s)",
     group: CONTROL,

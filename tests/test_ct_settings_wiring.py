@@ -70,6 +70,10 @@ DESTINATIONS = {
     "min_charge_power": lambda ct002: _cfg(ct002).min_charge_power,
     "min_discharge_power": lambda ct002: _cfg(ct002).min_discharge_power,
     "min_power_hysteresis": lambda ct002: _cfg(ct002).min_power_hysteresis,
+    "min_efficient_charge_power": lambda ct002: _cfg(ct002).min_efficient_charge_power,
+    "min_efficient_discharge_power": lambda ct002: (
+        _cfg(ct002).min_efficient_discharge_power
+    ),
     "max_charge_power": lambda ct002: _cfg(ct002).max_charge_power,
     "max_discharge_power": lambda ct002: _cfg(ct002).max_discharge_power,
     # Saturation tracking.

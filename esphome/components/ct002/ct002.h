@@ -396,12 +396,11 @@ class CT002Component : public Component {
   float effective_min_discharge_power(const std::string &consumer_id) const;
   void force_balancer_rotation();
 
-  // True when efficiency rotation is enabled (min_efficient_power > 0). Mirrors
+  // True when efficiency rotation is enabled in either direction
+  // (min_efficient_power, or its charge / discharge override, above 0). Mirrors
   // LoadBalancer.efficiency_rotation_enabled in the Python stack; used by
   // mqtt_insights to decide whether to surface the Force Rotation button.
-  bool efficiency_rotation_enabled() const {
-    return this->balancer_cfg_.min_efficient_power > 0.0f;
-  }
+  bool efficiency_rotation_enabled() const { return this->balancer_cfg_.efficiency_enabled(); }
 
   // How well the loop is holding the grid at zero (see ControlQualityTracker).
   // Mirrors CT002's use of LoadBalancer.control_quality in the Python stack;
