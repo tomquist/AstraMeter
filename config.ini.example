@@ -204,11 +204,12 @@ THROTTLE_INTERVAL = 0
 ## Example: 2 batteries, 200W demand, threshold 150 → one gets 200W, other 0W.
 # MIN_EFFICIENT_POWER = 0
 ## The same threshold for charging / discharging only, when the two differ:
-## e.g. 375 to spread discharging early but 1200 to charge on one battery up
-## to 1200 W. Unset uses MIN_EFFICIENT_POWER; 0 turns concentration off in
-## that direction. Unlike MIN_CHARGE_POWER / MIN_DISCHARGE_POWER, which idle a
-## battery below a minimum, these decide how many batteries share the load and
-## always keep one running.
+## per battery, like MIN_EFFICIENT_POWER. With two batteries, 375 to share
+## discharging from about 900 W but 1200 to keep charging on one battery until
+## the surplus reaches about 2880 W. Unset uses MIN_EFFICIENT_POWER; 0 turns
+## concentration off in that direction. Unlike MIN_CHARGE_POWER /
+## MIN_DISCHARGE_POWER, which idle a battery below a minimum, these decide how
+## many batteries share the load and leave one running.
 # MIN_EFFICIENT_CHARGE_POWER = 1200
 # MIN_EFFICIENT_DISCHARGE_POWER = 375
 ## Seconds between rotating which battery has priority (minimum 10).

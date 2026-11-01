@@ -323,9 +323,10 @@ export const OPTION_META: Record<string, OptionMeta> = {
     label: "Minimum efficient charge power (W)",
     group: CONTROL,
     help:
-      "The minimum efficient power while charging, e.g. 1200 to charge on " +
-      "one battery until the surplus reaches 1200 W. 0 keeps them all on " +
-      "while charging. Unlike the minimum charge power, one always runs.",
+      "The minimum efficient power while charging, per battery: with two, " +
+      "1200 keeps charging on one until the surplus reaches about 2880 W. " +
+      "0 keeps them all on while charging. Unlike the minimum charge power, " +
+      "it leaves one running.",
     placeholder: "(minimum efficient power)",
   },
   min_efficient_discharge_power: {

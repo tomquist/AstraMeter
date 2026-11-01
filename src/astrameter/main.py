@@ -183,7 +183,7 @@ def _log_ct_settings(ct: CtSettings, device_type: str, device_id: str) -> None:
     if balancer.efficiency_enabled:
         charge, discharge = balancer.efficient_power(-1), balancer.efficient_power(1)
         if charge == discharge:
-            extras.append(f"efficiency optimization ({ct.min_efficient_power}W)")
+            extras.append(f"efficiency optimization ({charge:g}W)")
         else:
             extras.append(
                 f"efficiency optimization (charge {charge:g}W, "

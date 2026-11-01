@@ -721,8 +721,8 @@ To use a different value while charging than while discharging, set
 back to `MIN_EFFICIENT_POWER` when unset, and `0` turns it off in that direction.
 For example, a pair of Venus E (2500 W charge, 800 W discharge) with
 `MIN_EFFICIENT_DISCHARGE_POWER = 375` and `MIN_EFFICIENT_CHARGE_POWER = 1200`
-shares discharging from about 750 W but charges on one battery up to about
-2400 W. See
+starts the second battery discharging at about 900 W of demand, but keeps
+charging on one battery until the surplus reaches about 2880 W. See
 [Battery efficiency optimization](ct002.md#battery-efficiency-optimization).
 
 ### My B2500 stays at 0 W or doesn't cover a small base load.
