@@ -165,6 +165,9 @@ def test_charging_concentrates_up_to_the_charge_threshold() -> None:
     # A small surplus is still absorbed by that one battery.
     run(-80, ticks=3)
     assert run.active == 1
+    (active,) = [mac for mac in MACS if mac not in run.lb._deprioritized]
+    intent = run.lb.get_last_intent(active)
+    assert intent is not None and intent < 0, "the active battery charges"
     # Past 2 x 1200 x 1.2 both charge.
     run(-2900, ticks=3)
     assert run.active == 2

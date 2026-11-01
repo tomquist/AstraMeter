@@ -250,4 +250,10 @@ def test_startup_log_reports_the_efficiency_thresholds_in_effect(
     assert "efficiency optimization (charge 1200W, discharge 375W)" in logged(
         min_efficient_power=375, min_efficient_charge_power=1200
     )
+    assert "efficiency optimization (charge 1200W, discharge 0W)" in logged(
+        min_efficient_power=0, min_efficient_charge_power=1200
+    )
+    assert "efficiency optimization (charge 375W, discharge 0W)" in logged(
+        min_efficient_power=375, min_efficient_discharge_power=0
+    )
     assert "efficiency optimization" not in logged(min_efficient_power=0)
