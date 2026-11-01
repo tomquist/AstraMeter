@@ -344,6 +344,38 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
       mdo["entity_category"] = "config";
     }
 
+    // Min / Max Charge and Discharge Power numbers — below the minimum a battery
+    // idles at 0 W rather than run at a few watts, where its inverter is least
+    // efficient; the maximum caps what it is asked for (the top of the range is
+    // no limit).
+    struct PowerLimit {
+      const char *key;
+      const char *name;
+      const char *fallback;
+    };
+    for (const auto &limit : {PowerLimit{"min_charge_power", "Min Charge Power", "0"},
+                              PowerLimit{"min_discharge_power", "Min Discharge Power", "0"},
+                              PowerLimit{"max_charge_power", "Max Charge Power", "11040"},
+                              PowerLimit{"max_discharge_power", "Max Discharge Power", "11040"}}) {
+      const std::string key = limit.key;
+      JsonObject mp = components[key].to<JsonObject>();
+      mp["platform"] = "number";
+      mp["unique_id"] = uid_prefix + "_" + key;
+      mp["name"] = limit.name;
+      mp["unit_of_measurement"] = "W";
+      mp["device_class"] = "power";
+      mp["min"] = 0;
+      mp["max"] = static_cast<int>(controls::BATTERY_POWER_MAX);
+      mp["step"] = 1;
+      mp["mode"] = "box";
+      mp["state_topic"] = state_topic;
+      mp["value_template"] =
+          "{{ value_json." + key + " | default(" + std::string(limit.fallback) + ") }}";
+      mp["command_topic"] = state_topic + "/" + key + "/set";
+      mp["retain"] = true;
+      mp["entity_category"] = "config";
+    }
+
     // Device info
     JsonObject device = root["device"].to<JsonObject>();
     JsonArray identifiers = device["identifiers"].to<JsonArray>();

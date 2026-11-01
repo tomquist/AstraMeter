@@ -117,6 +117,16 @@ struct Consumer {
   // Per-device MIN_DC_OUTPUT override (W); unset = inherit global. Tuned live
   // via the MQTT "Min DC Output" entity; mirrors Python's Consumer.min_dc_output.
   std::optional<float> min_dc_output;
+  // Per-device MIN_CHARGE_POWER / MIN_DISCHARGE_POWER overrides (W); unset =
+  // inherit global. Tuned live via the MQTT "Min Charge Power" / "Min Discharge
+  // Power" entities; mirror Python's Consumer fields of the same names.
+  std::optional<float> min_charge_power;
+  std::optional<float> min_discharge_power;
+  // Per-device MAX_CHARGE_POWER / MAX_DISCHARGE_POWER overrides (W); unset =
+  // inherit global, BATTERY_POWER_MAX or more = no limit. Tuned live via the
+  // MQTT "Max Charge Power" / "Max Discharge Power" entities.
+  std::optional<float> max_charge_power;
+  std::optional<float> max_discharge_power;
   // Net AC power the balancer last instructed this consumer to be at —
   // distinct from `power` (what the consumer reports). Under active control
   // the A/B/C cross-talk *_chrg_power / *_dchrg_power fields aggregate THIS,
@@ -138,6 +148,10 @@ struct ConsumerOverride {
   float distribution_weight{1.0f};
   float efficiency_window_weight{1.0f};
   std::optional<float> min_dc_output;
+  std::optional<float> min_charge_power;
+  std::optional<float> min_discharge_power;
+  std::optional<float> max_charge_power;
+  std::optional<float> max_discharge_power;
 };
 
 class CT002Component : public Component {
@@ -275,6 +289,12 @@ class CT002Component : public Component {
     float distribution_weight{1.0f};
     float efficiency_window_weight{1.0f};
     std::optional<float> min_dc_output;
+    // In effect for this battery: its own setting, else the global one.
+    float min_charge_power{0.0f};
+    float min_discharge_power{0.0f};
+    // BATTERY_POWER_MAX when the battery has no limit.
+    float max_charge_power{0.0f};
+    float max_discharge_power{0.0f};
     std::optional<float> poll_interval;
     std::optional<float> answer_interval;
     double timestamp{0.0};
@@ -362,6 +382,18 @@ class CT002Component : public Component {
   void set_consumer_distribution_weight(const std::string &consumer_id, float weight);
   void set_consumer_efficiency_window_weight(const std::string &consumer_id, float weight);
   void set_consumer_min_dc_output(const std::string &consumer_id, float value);
+  void set_consumer_min_charge_power(const std::string &consumer_id, float value);
+  void set_consumer_min_discharge_power(const std::string &consumer_id, float value);
+  void set_consumer_max_charge_power(const std::string &consumer_id, float value);
+  void set_consumer_max_discharge_power(const std::string &consumer_id, float value);
+  // The MAX_CHARGE_POWER / MAX_DISCHARGE_POWER in effect for a battery (W):
+  // its own setting, else the global one, BATTERY_POWER_MAX for no limit.
+  float effective_max_charge_power(const std::string &consumer_id) const;
+  float effective_max_discharge_power(const std::string &consumer_id) const;
+  // The MIN_CHARGE_POWER / MIN_DISCHARGE_POWER in effect for a battery (W):
+  // its own setting, else the global one. Mirrors ct002.py.
+  float effective_min_charge_power(const std::string &consumer_id) const;
+  float effective_min_discharge_power(const std::string &consumer_id) const;
   void force_balancer_rotation();
 
   // True when efficiency rotation is enabled (min_efficient_power > 0). Mirrors
