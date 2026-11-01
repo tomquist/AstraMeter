@@ -170,6 +170,7 @@ ct002:
   #   min_dc_output: 0             # >0 keeps a DC battery (B2500) inverter awake
   #   min_charge_power: 0          # below this a battery idles instead of charging; 0 = off
   #   min_discharge_power: 0       # below this a battery idles instead of discharging; 0 = off
+  #   min_power_hysteresis: 20     # an idle battery starts again this many W above its minimum; unset = +20%
   #   max_charge_power: 800        # most a battery charges at; unset = no limit, 0 = never
   #   max_discharge_power: 800     # most a battery discharges at; unset = no limit, 0 = never
   #   min_efficient_power: 0       # >0 enables efficiency rotation

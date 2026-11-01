@@ -143,6 +143,7 @@ CONF_EFFICIENCY_DEMAND_ALPHA = "efficiency_demand_alpha"
 CONF_MIN_DC_OUTPUT = "min_dc_output"
 CONF_MIN_CHARGE_POWER = "min_charge_power"
 CONF_MIN_DISCHARGE_POWER = "min_discharge_power"
+CONF_MIN_POWER_HYSTERESIS = "min_power_hysteresis"
 CONF_MAX_CHARGE_POWER = "max_charge_power"
 CONF_MAX_DISCHARGE_POWER = "max_discharge_power"
 # Upper bound of a per-battery power setting (W): a three-phase connection on
@@ -606,6 +607,10 @@ BALANCER_SCHEMA = cv.Schema(
             min=0.0, max=BATTERY_POWER_MAX
         ),
         cv.Optional(CONF_MIN_DISCHARGE_POWER, default=0.0): cv.float_range(
+            min=0.0, max=BATTERY_POWER_MAX
+        ),
+        # Unset = start again at 1.2x the minimum.
+        cv.Optional(CONF_MIN_POWER_HYSTERESIS): cv.float_range(
             min=0.0, max=BATTERY_POWER_MAX
         ),
         # Unset = no limit; 0 keeps a battery out of that direction.
@@ -1296,15 +1301,19 @@ async def to_code(config):
         ("concentrate_deadband", bal.get(CONF_CONCENTRATE_DEADBAND, 60.0)),
         ("import_trim_w", bal.get(CONF_IMPORT_TRIM_W, 15.0)),
     ]
-    # Unset = no limit: the C++ fields are std::optional and stay empty. They
-    # follow min_discharge_power, since designated initializers must keep the
-    # struct's declaration order.
+    # Unset = the default start point / no limit: the C++ fields are
+    # std::optional and stay empty. They follow min_discharge_power, since
+    # designated initializers must keep the struct's declaration order.
     at = 1 + next(
         i for i, (k, _) in enumerate(bcfg_fields) if k == "min_discharge_power"
     )
     bcfg_fields[at:at] = [
         (key, bal[key])
-        for key in (CONF_MAX_CHARGE_POWER, CONF_MAX_DISCHARGE_POWER)
+        for key in (
+            CONF_MIN_POWER_HYSTERESIS,
+            CONF_MAX_CHARGE_POWER,
+            CONF_MAX_DISCHARGE_POWER,
+        )
         if key in bal
     ]
     bcfg = cg.StructInitializer(BalancerConfig, *bcfg_fields)

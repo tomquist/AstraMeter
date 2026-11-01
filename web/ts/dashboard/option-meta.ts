@@ -352,6 +352,15 @@ export const OPTION_META: Record<string, OptionMeta> = {
       "surplus usually pays more than exporting it, so 0 is usually right.",
     placeholder: "0",
   },
+  min_power_hysteresis: {
+    label: "Minimum power hysteresis (W)",
+    group: CONTROL,
+    help:
+      "How far above its minimum an idle battery's share must reach before " +
+      "it starts again. Minimum discharge 30 with 20 here: it starts at 50 W " +
+      "and stops at 30 W.",
+    placeholder: "(20% of the minimum)",
+  },
   max_discharge_power: {
     label: "Maximum discharge power (W)",
     group: CONTROL,

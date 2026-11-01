@@ -309,6 +309,7 @@ _UNIT_SUFFIX = {
     "min_dc_output": "_w",
     "min_charge_power": "_w",
     "min_discharge_power": "_w",
+    "min_power_hysteresis": "_w",
     "max_charge_power": "_w",
     "max_discharge_power": "_w",
     "efficiency_rotation_interval": "_s",

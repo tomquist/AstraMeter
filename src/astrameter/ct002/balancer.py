@@ -515,6 +515,11 @@ class BalancerConfig:
     # (``ConsumerReport``) overrides these.  ``0`` disables.
     min_charge_power: float = 0
     min_discharge_power: float = 0
+    # How far (W) above its minimum a battery idling below it must be asked
+    # for before it starts again (see ``_start_power``); the gap keeps a
+    # demand hovering at the minimum from switching it on and off.  ``None``
+    # starts it at EFFICIENCY_HYSTERESIS_FACTOR times its minimum.
+    min_power_hysteresis: float | None = None
     # Maximum charge / discharge (W) a battery is asked for: its command is
     # capped there and the others, or the grid, take the rest (see
     # ``_max_power``).  ``None`` (or BATTERY_POWER_MAX and above) is no limit;
@@ -579,7 +584,7 @@ class BalancerConfig:
         _clamp("min_dc_output", 0, float("inf"))
         _clamp("min_charge_power", 0, BATTERY_POWER_MAX)
         _clamp("min_discharge_power", 0, BATTERY_POWER_MAX)
-        for name in ("max_charge_power", "max_discharge_power"):
+        for name in ("min_power_hysteresis", "max_charge_power", "max_discharge_power"):
             if getattr(self, name) is not None:
                 _clamp(name, 0, BATTERY_POWER_MAX)
         _clamp("pace_base_step", 0, float("inf"))
@@ -2417,6 +2422,23 @@ class LoadBalancer:
             return 0.0
         return default if own is None else own
 
+    def _start_power(self, report: ConsumerReport, sign: int, minimum: float) -> float:
+        """The share (W) at which a battery idling below *minimum* starts again.
+
+        *minimum* plus MIN_POWER_HYSTERESIS, or EFFICIENCY_HYSTERESIS_FACTOR
+        times it when that is unset.  Held at the battery's maximum when that
+        lies in between, or a battery allowed to run there could never start:
+        its share is capped at the maximum, below the start point.
+        """
+        if minimum <= 0.0:
+            return 0.0
+        gap = self._cfg.min_power_hysteresis
+        start = minimum * EFFICIENCY_HYSTERESIS_FACTOR if gap is None else minimum + gap
+        cap = self._max_power(report, sign)
+        if cap is not None and cap >= minimum:
+            start = min(start, cap)
+        return start
+
     def _below_min_power(
         self,
         reports: Reports,
@@ -2434,9 +2456,9 @@ class LoadBalancer:
         below idles and the rest are split again — so two batteries that would
         each run at 40 W become one at 80 W rather than none, and the pool
         idles only when even one battery alone would run below its minimum.
-        An idle battery resumes only once its share reaches
-        EFFICIENCY_HYSTERESIS_FACTOR times its minimum, so a demand hovering
-        at the minimum does not toggle it.  Updates each battery's
+        An idle battery resumes only once its share reaches its start point
+        (see :meth:`_start_power`), so a demand hovering at the minimum does
+        not toggle it.  Updates each battery's
         ``min_power_idle``; *exempt* batteries (the standby reserve spilling)
         and those taking no share are left as they are.
         """
@@ -2463,7 +2485,7 @@ class LoadBalancer:
         def threshold(cid: str) -> float:
             minimum = self._min_power(reports[cid], sign)
             if was_idle(cid):
-                return minimum * EFFICIENCY_HYSTERESIS_FACTOR
+                return self._start_power(reports[cid], sign, minimum)
             return minimum
 
         running = list(ids)

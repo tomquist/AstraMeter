@@ -173,6 +173,10 @@ THROTTLE_INTERVAL = 0
 ## Home Assistant. 0 disables (default).
 # MIN_CHARGE_POWER = 0
 # MIN_DISCHARGE_POWER = 0
+## How many watts above its minimum an idle battery's share must reach before
+## it starts again. With MIN_DISCHARGE_POWER = 30 and 20 here, the battery
+## starts at 50 W and stops at 30 W. Unset: 20% above the minimum.
+# MIN_POWER_HYSTERESIS = 20
 
 ## --- Maximum charge / discharge power ---
 ## Applies per battery. The most a battery is asked to charge or discharge;

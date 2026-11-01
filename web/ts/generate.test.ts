@@ -303,6 +303,7 @@ const eyHa = generateEsphome({
     fields: {
       BALANCE_GAIN: "0.3",
       MIN_DISCHARGE_POWER: "50",
+      MIN_POWER_HYSTERESIS: "20",
       MAX_CHARGE_POWER: "600",
       CLOUD_REPORTING: "True",
       CLOUD_REPORTING_HOST: "eu.hamedata.com",
@@ -326,6 +327,7 @@ has(eyHa, "ct_type: HME-4", "esp/ha: ct_type");
 has(eyHa, "balance_gain: 0.3", "esp/ha: balancer sub-block");
 has(eyHa, "min_discharge_power: 50", "esp/ha: min discharge power in the balancer sub-block");
 has(eyHa, "max_charge_power: 600", "esp/ha: max charge power in the balancer sub-block");
+has(eyHa, "min_power_hysteresis: 20", "esp/ha: min power hysteresis in the balancer sub-block");
 // a single offset must apply to all three phase sensors, not just L1
 ok((eyHa.match(/- offset: -20/g) || []).length === 3, "esp/ha: single offset applied to all 3 phases");
 
@@ -704,6 +706,7 @@ const haOpts = generateHomeAssistant({
       MIN_DC_OUTPUT: "30",
       MIN_DISCHARGE_POWER: "50",
       MIN_CHARGE_POWER: "40",
+      MIN_POWER_HYSTERESIS: "20",
       MAX_DISCHARGE_POWER: "800",
       MAX_CHARGE_POWER: "0",
       ACTIVE_CONTROL: "False",
@@ -736,6 +739,7 @@ has(haOpts, "min_dc_output: 30", "ha-opts: min dc output");
 has(haOpts, "min_discharge_power: 50", "ha-opts: min discharge power");
 has(haOpts, "min_charge_power: 40", "ha-opts: min charge power");
 has(haOpts, "max_discharge_power: 800", "ha-opts: max discharge power");
+has(haOpts, "min_power_hysteresis: 20", "ha-opts: min power hysteresis");
 has(haOpts, "max_charge_power: 0", "ha-opts: max charge power (explicit 0 kept)");
 has(haOpts, "grid_predict_trust: 0.7", "ha-opts: grid predict trust");
 has(haOpts, "fair_distribution: false", "ha-opts: fair distribution off");

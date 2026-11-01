@@ -44,6 +44,9 @@ configuration:
   min_discharge_power:
     name: Min Discharge Power
     description: "Lowest power (in watts) a battery discharges at. When its share of the household demand is smaller, it stays idle and the other batteries or the grid cover it, because a battery discharges least efficiently at a few watts. It resumes once its share is 20% above the minimum. Each battery can override this from Home Assistant. 0 = no minimum (default). Only applies to CT002/CT003 device types."
+  min_power_hysteresis:
+    name: Min Power Hysteresis
+    description: "How many watts above its minimum charge or discharge power a battery's share must reach before an idle battery starts again, so a demand hovering at the minimum doesn't switch it on and off. Example: Min Discharge Power 30 and 20 here start the battery at 50 W and stop it at 30 W. Leave empty to start at 20% above the minimum (default). Only applies to CT002/CT003 device types."
   max_charge_power:
     name: Max Charge Power
     description: "Most power (in watts) a battery charges at; the other batteries, or the grid, take what is left of the surplus. 0 keeps it from charging. Each battery can override this from Home Assistant. Leave empty for no limit (default). Only applies to CT002/CT003 device types."

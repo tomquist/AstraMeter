@@ -116,6 +116,49 @@ class TestSingleBattery:
         assert _send(device, 800) == 300
 
 
+class TestHysteresis:
+    def test_a_configured_gap_sets_the_start_point(self):
+        # Issue #721: start at 50 W, stop at 30 W.
+        device = _ct002(min_discharge_power=30.0, min_power_hysteresis=20.0)
+        device._update_consumer_report("a", "A", 0)
+        assert _send(device, 19) == 0
+        assert _send(device, 49) == 0
+        assert _send(device, 51) == 51
+        device._update_consumer_report("a", "A", 51)
+        # Running, it holds on down to the minimum (winding back towards the
+        # 31 W demand, not to 0 W) ...
+        assert -20 <= _send(device, -20) < 0
+        assert not _idle(device, "a")
+        # ... and idles below it.
+        assert _send(device, -25) == -51
+        assert _idle(device, "a")
+
+    def test_a_gap_of_zero_starts_at_the_minimum(self):
+        device = _ct002(min_discharge_power=30.0, min_power_hysteresis=0.0)
+        device._update_consumer_report("a", "A", 0)
+        assert _send(device, 19) == 0
+        assert _send(device, 31) == 31
+
+    def test_the_start_point_is_held_at_the_maximum(self):
+        # Allowed to run at 30-40 W, it must be able to start there too.
+        device = _ct002(
+            min_discharge_power=30.0,
+            min_power_hysteresis=20.0,
+            max_discharge_power=40.0,
+        )
+        device._update_consumer_report("a", "A", 0)
+        assert _send(device, 19) == 0
+        assert _send(device, 45) == 40
+        assert not _idle(device, "a")
+
+    def test_it_applies_to_charging_too(self):
+        device = _ct002(min_charge_power=100.0, min_power_hysteresis=50.0)
+        device._update_consumer_report("a", "A", 0)
+        assert _send(device, -50) == 0
+        assert _send(device, -140) == 0
+        assert _send(device, -160) == -160
+
+
 class TestPerBattery:
     def test_a_battery_setting_overrides_the_global_one(self):
         device = _ct002(min_discharge_power=50.0)
@@ -207,6 +250,7 @@ def test_report_and_config_defaults_mean_no_minimum():
     cfg = BalancerConfig()
     assert cfg.min_charge_power == 0
     assert cfg.min_discharge_power == 0
+    assert cfg.min_power_hysteresis is None
     # Bounded like the per-battery controls.
     assert BalancerConfig(min_discharge_power=1e9).min_discharge_power == (
         BATTERY_POWER_MAX

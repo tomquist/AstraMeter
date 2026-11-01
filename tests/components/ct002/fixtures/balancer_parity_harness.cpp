@@ -32,6 +32,8 @@
 //   minpow <min_charge> <min_discharge>
 //        Global MIN_CHARGE_POWER / MIN_DISCHARGE_POWER for the next cfg
 //        (absent = 0). Must precede the cfg it applies to.
+//   hyst <watts>
+//        Global MIN_POWER_HYSTERESIS for the next cfg (< 0 / absent = unset).
 //   maxpow <max_charge> <max_discharge>
 //        Global MAX_CHARGE_POWER / MAX_DISCHARGE_POWER for the next cfg
 //        (< 0 / absent = no limit). Must precede the cfg it applies to.
@@ -67,6 +69,7 @@ namespace {
 double g_clock = 0.0;
 float g_min_charge = 0.0f, g_min_discharge = 0.0f;
 float g_max_charge = -1.0f, g_max_discharge = -1.0f;
+float g_hysteresis = -1.0f;
 struct PowerOverride {
   float min_charge, min_discharge, max_charge, max_discharge;
 };
@@ -108,6 +111,7 @@ int main() {
       cfg.min_dc_output = min_dc;
       cfg.min_charge_power = g_min_charge;
       cfg.min_discharge_power = g_min_discharge;
+      if (g_hysteresis >= 0.0f) cfg.min_power_hysteresis = g_hysteresis;
       if (g_max_charge >= 0.0f) cfg.max_charge_power = g_max_charge;
       if (g_max_discharge >= 0.0f) cfg.max_discharge_power = g_max_discharge;
       // Optional trailing ramp-pacing pair (absent = keep the struct
@@ -175,6 +179,8 @@ int main() {
       std::cout << out[0] << " " << out[1] << " " << out[2] << "\n";
     } else if (cmd == "minpow") {
       in >> g_min_charge >> g_min_discharge;
+    } else if (cmd == "hyst") {
+      in >> g_hysteresis;
     } else if (cmd == "maxpow") {
       in >> g_max_charge >> g_max_discharge;
     } else if (cmd == "override") {

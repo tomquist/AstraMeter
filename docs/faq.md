@@ -284,7 +284,9 @@ in the ESPHome `balancer:` block). Below this many watts of demand the battery
 stays at 0 W and the grid supplies the house; above it, the battery covers
 everything as before. For example, `MIN_DISCHARGE_POWER = 50` lets a 20 W night
 standby come from the grid. It only starts again once its share is 20% above
-the minimum, so a load hovering at 50 W doesn't switch it on and off. Each
+the minimum, so a load hovering at 50 W doesn't switch it on and off; set
+`MIN_POWER_HYSTERESIS` to choose that gap in watts, e.g. `MIN_DISCHARGE_POWER =
+30` and `MIN_POWER_HYSTERESIS = 20` to start at 50 W and stop at 30 W. Each
 battery can also have its own value in Home Assistant or on the dashboard. See
 [Minimum charge and discharge power](ct002.md#minimum-charge-and-discharge-power).
 

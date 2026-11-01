@@ -166,6 +166,8 @@ void BalancerConfig::clamp() {
   if (min_dc_output < 0.0f) min_dc_output = 0.0f;
   clamp_v(min_charge_power, 0.0f, controls::BATTERY_POWER_MAX);
   clamp_v(min_discharge_power, 0.0f, controls::BATTERY_POWER_MAX);
+  if (min_power_hysteresis)
+    clamp_v(*min_power_hysteresis, 0.0f, controls::BATTERY_POWER_MAX);
   if (pace_base_step < 0.0f) pace_base_step = 0.0f;
   if (pace_max_step < pace_base_step) pace_max_step = pace_base_step;
   clamp_v(osc_damp_max, 0.0f, 1.0f);
@@ -827,8 +829,7 @@ std::unordered_set<std::string> LoadBalancer::below_min_power_(
   const auto ceilings = this->ceilings_(reports, ids, sign);
   auto threshold = [&](const std::string &cid) {
     const float minimum = this->min_power_(reports.at(cid), sign);
-    if (was_idle(cid))
-      return minimum * static_cast<float>(EFFICIENCY_HYSTERESIS_FACTOR);
+    if (was_idle(cid)) return this->start_power_(reports.at(cid), sign, minimum);
     return minimum;
   };
   std::vector<std::string> running = ids;
@@ -1112,6 +1113,20 @@ std::optional<float> LoadBalancer::max_power_(const ConsumerReport &report, int 
   }
   if (!cap || *cap >= controls::BATTERY_POWER_MAX) return std::nullopt;
   return std::max(0.0f, *cap);
+}
+
+// *minimum* plus MIN_POWER_HYSTERESIS, or EFFICIENCY_HYSTERESIS_FACTOR times it
+// when that is unset; held at the battery's maximum when that lies in between,
+// or a battery allowed to run there could never start. Mirrors balancer.py
+// _start_power.
+float LoadBalancer::start_power_(const ConsumerReport &report, int sign, float minimum) const {
+  if (minimum <= 0.0f) return 0.0f;
+  const auto &gap = this->cfg_.min_power_hysteresis;
+  float start = gap ? minimum + std::max(0.0f, *gap)
+                    : minimum * static_cast<float>(EFFICIENCY_HYSTERESIS_FACTOR);
+  const auto cap = this->max_power_(report, sign);
+  if (cap && *cap >= minimum) start = std::min(start, *cap);
+  return start;
 }
 
 // The lower of the configured maximum and the ceiling the battery was observed

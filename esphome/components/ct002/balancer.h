@@ -266,6 +266,10 @@ struct BalancerConfig {
   // balancer.py _below_min_power.
   float min_charge_power{0.0f};
   float min_discharge_power{0.0f};
+  // How far (W) above its minimum a battery idling below it must be asked for
+  // before it starts again; unset = EFFICIENCY_HYSTERESIS_FACTOR times the
+  // minimum. See balancer.py _start_power.
+  std::optional<float> min_power_hysteresis{};
   // Maximum charge / discharge (W) a battery is asked for: its command is
   // capped there and the others, or the grid, take the rest. Unset (or
   // BATTERY_POWER_MAX and above) is no limit; 0 keeps the battery out of that
@@ -666,6 +670,9 @@ class LoadBalancer {
   // The most *report*'s battery is asked for in direction *sign* (W), unset
   // for no limit. Mirrors balancer.py _max_power.
   std::optional<float> max_power_(const ConsumerReport &report, int sign) const;
+  // The share (W) at which a battery idling below *minimum* starts again.
+  // Mirrors balancer.py _start_power.
+  float start_power_(const ConsumerReport &report, int sign, float minimum) const;
   // The ceiling *consumer_id* has in direction *sign*: the lower of its
   // maximum and its learned ceiling. Mirrors balancer.py _limit.
   std::optional<float> limit_(const ReportMap &reports, const std::string &consumer_id,

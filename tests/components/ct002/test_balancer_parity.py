@@ -100,6 +100,7 @@ class PyDriver:
         self.out: list[str] = []
         self.min_power = (0.0, 0.0)
         self.max_power: tuple[float | None, float | None] = (None, None)
+        self.hysteresis: float | None = None
         self.power_overrides: dict[str, tuple[float, ...]] = {}
 
     def feed(self, line: str) -> None:
@@ -147,6 +148,7 @@ class PyDriver:
                 min_dc_output=min_dc,
                 min_charge_power=self.min_power[0],
                 min_discharge_power=self.min_power[1],
+                min_power_hysteresis=self.hysteresis,
                 max_charge_power=self.max_power[0],
                 max_discharge_power=self.max_power[1],
                 **pace_kwargs,
@@ -164,6 +166,8 @@ class PyDriver:
             )
         elif cmd == "minpow":
             self.min_power = (float(parts[1]), float(parts[2]))
+        elif cmd == "hyst":
+            self.hysteresis = None if float(parts[1]) < 0 else float(parts[1])
         elif cmd == "maxpow":
             self.max_power = tuple(  # type: ignore[assignment]
                 None if float(v) < 0 else float(v) for v in parts[1:3]
@@ -519,13 +523,16 @@ def _scenario_min_dc_output() -> list[str]:
     return lines
 
 
-def _scenario_min_power() -> list[str]:
+def _scenario_min_power(hysteresis: float | None = None) -> list[str]:
     """Exercise MIN_CHARGE_POWER / MIN_DISCHARGE_POWER (issue #721): a pool of
     three on one phase whose demand sweeps through every minimum in both
     directions, so batteries drop out one at a time, resume past the
-    hysteresis, and one battery's own override is judged on its own."""
+    hysteresis, and one battery's own override is judged on its own.  With
+    *hysteresis*, the start point is that far above the minimum, and battery
+    b's discharge cap sits inside the gap so the start point is held there."""
     lines = [
         "minpow 60 50",
+        *([f"hyst {hysteresis}", "override b -1 -1 -1 70"] if hysteresis else []),
         "cfg 1 0 900 0.4 0.15 20 90 1 0 30 100 0 15",
         "override c -1 120",
         "clock 2000",
@@ -737,6 +744,11 @@ def test_parity_import_trim(harness: Path) -> None:
 def test_parity_min_power(harness: Path) -> None:
     lines = _scenario_min_power()
     _compare("min_power", lines, _run_cpp(harness, lines), _run_py(lines))
+
+
+def test_parity_min_power_hysteresis(harness: Path) -> None:
+    lines = _scenario_min_power(hysteresis=40.0)
+    _compare("min_power_hysteresis", lines, _run_cpp(harness, lines), _run_py(lines))
 
 
 def test_parity_max_power(harness: Path) -> None:

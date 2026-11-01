@@ -126,6 +126,7 @@ _CT_FIELDS = (
     "min_dc_output",
     "min_charge_power",
     "min_discharge_power",
+    "min_power_hysteresis",
     "max_charge_power",
     "max_discharge_power",
     "grid_predict_trust",

@@ -1030,6 +1030,7 @@ export function generateHomeAssistant(state: State): string {
   add("min_dc_output", ctf.MIN_DC_OUTPUT);
   add("min_charge_power", ctf.MIN_CHARGE_POWER);
   add("min_discharge_power", ctf.MIN_DISCHARGE_POWER);
+  add("min_power_hysteresis", ctf.MIN_POWER_HYSTERESIS);
   add("max_charge_power", ctf.MAX_CHARGE_POWER);
   add("max_discharge_power", ctf.MAX_DISCHARGE_POWER);
   // Probe window / stall escape for the efficiency rotation (the "saturation"

@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Added** a minimum and maximum charge and discharge power per battery, so a battery stays idle instead of running at a few watts where it is least efficient, or is held below a limit you can change live. Set `MIN_*_POWER` / `MAX_*_POWER`, or per battery in Home Assistant ([#721](https://github.com/tomquist/astrameter/issues/721), [#752](https://github.com/tomquist/astrameter/pull/752)).
+- **Added** a minimum and maximum charge and discharge power per battery, so a battery stays idle instead of running at a few watts where it is least efficient, or is held below a limit you can change live. Set `MIN_*_POWER` / `MAX_*_POWER` and optionally `MIN_POWER_HYSTERESIS`, or per battery in Home Assistant ([#721](https://github.com/tomquist/astrameter/issues/721), [#752](https://github.com/tomquist/astrameter/pull/752)).
 
 - **Fixed** the ESP32 build with MQTT Insights restarting itself while the MQTT broker kept dropping the connection; the meter now keeps answering the batteries through the drops ([#748](https://github.com/tomquist/astrameter/pull/748)).
 
