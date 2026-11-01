@@ -5,6 +5,8 @@ from ipaddress import IPv4Network
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
+
 from astrameter.config.config_loader import (
     ClientFilter,
     apply_signal_wrappers,
@@ -223,7 +225,9 @@ def test_resolve_device_config_shellypro3em_is_one_device() -> None:
     assert device_ids == ["shellypro3em-ec4609c439c1"]
 
 
-def test_startup_log_reports_the_efficiency_thresholds_in_effect(caplog) -> None:
+def test_startup_log_reports_the_efficiency_thresholds_in_effect(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """The log shows the threshold rotation runs at, not MIN_EFFICIENT_POWER
     alone (issue #642): both overrides at 1200 W over a global 0 is 1200 W."""
     import logging
