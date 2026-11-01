@@ -263,7 +263,9 @@ jobs:
   # reaches the device.
   dashboard-e2e:
     needs: [ lint, web ]
-    runs-on: ubuntu-latest
+    # Not ubuntu-latest: on Ubuntu 26.04 the pinned Playwright refuses to
+    # install Chromium ("does not support chromium on ubuntu26.04-x64").
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -314,7 +316,9 @@ jobs:
 
   validate:
     needs: [ lint, web ]
-    runs-on: ubuntu-latest
+    # Not ubuntu-latest: on Ubuntu 26.04 the mosquitto the MQTT tests start
+    # never opens its port ("mosquitto did not start in time").
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
