@@ -1,5 +1,8 @@
 # Changelog
 
+## Next
+
+
 ## 2.5.0
 
 - **Added** separate efficiency-mode thresholds for charging and discharging, so two batteries can share discharging early while charging stays on one battery until the surplus is large. Set `MIN_EFFICIENT_CHARGE_POWER` and/or `MIN_EFFICIENT_DISCHARGE_POWER` ([#642](https://github.com/tomquist/astrameter/issues/642), [#755](https://github.com/tomquist/astrameter/pull/755)).
