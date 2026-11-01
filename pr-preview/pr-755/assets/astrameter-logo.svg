@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" width="100%" height="100%" role="img" aria-label="AstraMeter">
+  <defs>
+    <radialGradient id="bgGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#1e293b" />
+      <stop offset="100%" stop-color="#020617" />
+    </radialGradient>
+    <linearGradient id="energyGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#10b981" />
+      <stop offset="40%" stop-color="#06b6d4" />
+      <stop offset="100%" stop-color="#8b5cf6" />
+    </linearGradient>
+    <linearGradient id="starGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fde047" />
+      <stop offset="50%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#b45309" />
+    </linearGradient>
+    <filter id="neonGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+    <filter id="dropShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#000000" flood-opacity="0.6" />
+    </filter>
+  </defs>
+
+  <!-- Base plate -->
+  <rect width="300" height="300" rx="40" fill="url(#bgGlow)" />
+  <rect width="300" height="300" rx="40" fill="none" stroke="#334155" stroke-width="2" />
+
+  <!-- Meter dial -->
+  <path d="M 50 170 A 100 100 0 0 1 250 170" fill="none" stroke="#1e293b" stroke-width="16" stroke-linecap="round" />
+  <path d="M 70 170 A 80 80 0 0 1 230 170" fill="none" stroke="#475569" stroke-width="4" stroke-linecap="butt" stroke-dasharray="4 21.13" />
+  <path d="M 50 170 A 100 100 0 0 1 230.9 111.2" fill="none" stroke="url(#energyGradient)" stroke-width="16" stroke-linecap="round" filter="url(#neonGlow)" />
+
+  <!-- Astra needle -->
+  <path d="M 150 40 Q 152 152 185 170 Q 152 178 150 210 Q 148 178 115 170 Q 148 152 150 40 Z" fill="url(#starGradient)" filter="url(#dropShadow)" />
+  <circle cx="150" cy="170" r="14" fill="#0f172a" stroke="#334155" stroke-width="3" filter="url(#dropShadow)" />
+  <circle cx="150" cy="170" r="5" fill="#fde047" />
+
+  <!-- Wordmark, outlined to paths so it renders identically in every browser
+       and rasteriser (no font dependency). "Astra" bold, "Meter" lighter. -->
+  <g aria-hidden="true">
+    <path transform="translate(63.70 260.00) scale(0.01562 -0.01562)" d="M1133 0 1008 360H471L346 0H51L565 1409H913L1425 0ZM739 1192 733 1170Q723 1134 709.0 1088.0Q695 1042 537 582H942L803 987L760 1123Z" fill="#ffffff" />
+    <path transform="translate(87.80 260.00) scale(0.01562 -0.01562)" d="M1055 316Q1055 159 926.5 69.5Q798 -20 571 -20Q348 -20 229.5 50.5Q111 121 72 270L319 307Q340 230 391.5 198.0Q443 166 571 166Q689 166 743.0 196.0Q797 226 797 290Q797 342 753.5 372.5Q710 403 606 424Q368 471 285.0 511.5Q202 552 158.5 616.5Q115 681 115 775Q115 930 234.5 1016.5Q354 1103 573 1103Q766 1103 883.5 1028.0Q1001 953 1030 811L781 785Q769 851 722.0 883.5Q675 916 573 916Q473 916 423.0 890.5Q373 865 373 805Q373 758 411.5 730.5Q450 703 541 685Q668 659 766.5 631.5Q865 604 924.5 566.0Q984 528 1019.5 468.5Q1055 409 1055 316Z" fill="#ffffff" />
+    <path transform="translate(106.60 260.00) scale(0.01562 -0.01562)" d="M420 -18Q296 -18 229.0 49.5Q162 117 162 254V892H25V1082H176L264 1336H440V1082H645V892H440V330Q440 251 470.0 213.5Q500 176 563 176Q596 176 657 190V16Q553 -18 420 -18Z" fill="#ffffff" />
+    <path transform="translate(118.26 260.00) scale(0.01562 -0.01562)" d="M143 0V828Q143 917 140.5 976.5Q138 1036 135 1082H403Q406 1064 411.0 972.5Q416 881 416 851H420Q461 965 493.0 1011.5Q525 1058 569.0 1080.5Q613 1103 679 1103Q733 1103 766 1088V853Q698 868 646 868Q541 868 482.5 783.0Q424 698 424 531V0Z" fill="#ffffff" />
+    <path transform="translate(131.71 260.00) scale(0.01562 -0.01562)" d="M393 -20Q236 -20 148.0 65.5Q60 151 60 306Q60 474 169.5 562.0Q279 650 487 652L720 656V711Q720 817 683.0 868.5Q646 920 562 920Q484 920 447.5 884.5Q411 849 402 767L109 781Q136 939 253.5 1020.5Q371 1102 574 1102Q779 1102 890.0 1001.0Q1001 900 1001 714V320Q1001 229 1021.5 194.5Q1042 160 1090 160Q1122 160 1152 166V14Q1127 8 1107.0 3.0Q1087 -2 1067.0 -5.0Q1047 -8 1024.5 -10.0Q1002 -12 972 -12Q866 -12 815.5 40.0Q765 92 755 193H749Q631 -20 393 -20ZM720 501 576 499Q478 495 437.0 477.5Q396 460 374.5 424.0Q353 388 353 328Q353 251 388.5 213.5Q424 176 483 176Q549 176 603.5 212.0Q658 248 689.0 311.5Q720 375 720 446Z" fill="#ffffff" />
+    <path transform="translate(150.51 260.00) scale(0.01562 -0.01562)" d="M1366 0V940Q1366 1096 1375 1240Q1326 1061 1287 960L923 0H789L420 960L364 1130L331 1240L334 1129L338 940V0H168V1409H419L794 432Q814 373 832.5 305.5Q851 238 857 208Q865 248 890.5 329.5Q916 411 925 432L1293 1409H1538V0Z" fill="#06b6d4" />
+    <path transform="translate(178.16 260.00) scale(0.01562 -0.01562)" d="M276 503Q276 317 353.0 216.0Q430 115 578 115Q695 115 765.5 162.0Q836 209 861 281L1019 236Q922 -20 578 -20Q338 -20 212.5 123.0Q87 266 87 548Q87 816 212.5 959.0Q338 1102 571 1102Q1048 1102 1048 527V503ZM862 641Q847 812 775.0 890.5Q703 969 568 969Q437 969 360.5 881.5Q284 794 278 641Z" fill="#06b6d4" />
+    <path transform="translate(196.96 260.00) scale(0.01562 -0.01562)" d="M554 8Q465 -16 372 -16Q156 -16 156 229V951H31V1082H163L216 1324H336V1082H536V951H336V268Q336 190 361.5 158.5Q387 127 450 127Q486 127 554 141Z" fill="#06b6d4" />
+    <path transform="translate(206.85 260.00) scale(0.01562 -0.01562)" d="M276 503Q276 317 353.0 216.0Q430 115 578 115Q695 115 765.5 162.0Q836 209 861 281L1019 236Q922 -20 578 -20Q338 -20 212.5 123.0Q87 266 87 548Q87 816 212.5 959.0Q338 1102 571 1102Q1048 1102 1048 527V503ZM862 641Q847 812 775.0 890.5Q703 969 568 969Q437 969 360.5 881.5Q284 794 278 641Z" fill="#06b6d4" />
+    <path transform="translate(225.65 260.00) scale(0.01562 -0.01562)" d="M142 0V830Q142 944 136 1082H306Q314 898 314 861H318Q361 1000 417.0 1051.0Q473 1102 575 1102Q611 1102 648 1092V927Q612 937 552 937Q440 937 381.0 840.5Q322 744 322 564V0Z" fill="#06b6d4" />
+  </g>
+</svg>
