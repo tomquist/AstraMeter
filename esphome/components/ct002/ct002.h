@@ -109,13 +109,24 @@ struct Consumer {
   // "Distribution Weight" entity; mirrors Python's Consumer.distribution_weight.
   float distribution_weight{1.0f};
   // Efficiency-rotation window weight ([0, 1], 1.0 = neutral / full
-  // participation, 0.0 = skipped while limiting). Tuned live via the MQTT
+  // participation, 0.0 = a backup: never leads, covers what the batteries
+  // ahead cannot). Tuned live via the MQTT
   // "Efficiency Window Weight" entity; mirrors Python's
   // Consumer.efficiency_window_weight.
   float efficiency_window_weight{1.0f};
   // Per-device MIN_DC_OUTPUT override (W); unset = inherit global. Tuned live
   // via the MQTT "Min DC Output" entity; mirrors Python's Consumer.min_dc_output.
   std::optional<float> min_dc_output;
+  // Per-device MIN_CHARGE_POWER / MIN_DISCHARGE_POWER overrides (W); unset =
+  // inherit global. Tuned live via the MQTT "Min Charge Power" / "Min Discharge
+  // Power" entities; mirror Python's Consumer fields of the same names.
+  std::optional<float> min_charge_power;
+  std::optional<float> min_discharge_power;
+  // Per-device MAX_CHARGE_POWER / MAX_DISCHARGE_POWER overrides (W); unset =
+  // inherit global, BATTERY_POWER_MAX or more = no limit. Tuned live via the
+  // MQTT "Max Charge Power" / "Max Discharge Power" entities.
+  std::optional<float> max_charge_power;
+  std::optional<float> max_discharge_power;
   // Net AC power the balancer last instructed this consumer to be at —
   // distinct from `power` (what the consumer reports). Under active control
   // the A/B/C cross-talk *_chrg_power / *_dchrg_power fields aggregate THIS,
@@ -137,6 +148,10 @@ struct ConsumerOverride {
   float distribution_weight{1.0f};
   float efficiency_window_weight{1.0f};
   std::optional<float> min_dc_output;
+  std::optional<float> min_charge_power;
+  std::optional<float> min_discharge_power;
+  std::optional<float> max_charge_power;
+  std::optional<float> max_discharge_power;
 };
 
 class CT002Component : public Component {
@@ -159,12 +174,29 @@ class CT002Component : public Component {
     }
     return freshest;
   }
+  uint32_t max_sensor_age_ms() const { return this->max_sensor_age_ms_; }
+  /// Latest reading of the optional voltage sensor of phase idx (V) or of
+  /// the frequency sensor (Hz), or nothing without the sensor or a reading
+  /// within max_sensor_age.
+  optional<float> grid_voltage(uint8_t idx) const {
+    if (idx >= 3) return {};
+    return this->fresh_reading_(this->voltage_values_[idx], this->voltage_stamp_ms_[idx]);
+  }
+  optional<float> grid_frequency() const {
+    return this->fresh_reading_(this->frequency_value_, this->frequency_stamp_ms_);
+  }
   float get_setup_priority() const override { return setup_priority::AFTER_WIFI; }
 
   // Configuration setters (called from to_code()).
   void set_power_sensor_l1(sensor::Sensor *s) { this->power_sensor_l1_ = s; }
   void set_power_sensor_l2(sensor::Sensor *s) { this->power_sensor_l2_ = s; }
   void set_power_sensor_l3(sensor::Sensor *s) { this->power_sensor_l3_ = s; }
+  // Optional grid readings AstraMeter doesn't steer on. The Bluetooth
+  // diagnostics and cloud reporting report them (see grid_voltage()).
+  void set_voltage_sensor(uint8_t idx, sensor::Sensor *s) {
+    if (idx < 3) this->voltage_sensors_[idx] = s;
+  }
+  void set_frequency_sensor(sensor::Sensor *s) { this->frequency_sensor_ = s; }
   // Per-phase unit→W conversion (issue #572). Called from to_code() when the
   // referenced sensor declares a power unit_of_measurement (kW → 1000, etc.).
   // Declaring any unit — even "W" — also disables the runtime kW-suspicion
@@ -257,6 +289,12 @@ class CT002Component : public Component {
     float distribution_weight{1.0f};
     float efficiency_window_weight{1.0f};
     std::optional<float> min_dc_output;
+    // In effect for this battery: its own setting, else the global one.
+    float min_charge_power{0.0f};
+    float min_discharge_power{0.0f};
+    // BATTERY_POWER_MAX when the battery has no limit.
+    float max_charge_power{0.0f};
+    float max_discharge_power{0.0f};
     std::optional<float> poll_interval;
     std::optional<float> answer_interval;
     double timestamp{0.0};
@@ -297,7 +335,19 @@ class CT002Component : public Component {
   // Configured ct_type/ct_mac forwarded to the Marstek MQTT topics.
   const std::string &ct_type() const { return this->ct_type_; }
   const std::string &ct_mac() const { return this->ct_mac_; }
+  // The MAC the Marstek app knows this CT by: ct_mac, or else the Bluetooth
+  // identity. Only the App topics use it; UDP keeps mirroring the requested
+  // MAC while ct_mac is unset.
+  void set_app_mac_fallback(const std::string &v) { this->app_mac_fallback_ = v; }
+  const std::string &app_mac() const { return this->ct_mac_.empty() ? this->app_mac_fallback_ : this->ct_mac_; }
   int wifi_rssi() const { return this->wifi_rssi_; }
+
+  // Phases whose measured power is reversed, as a real CT002 does when the
+  // Marstek app sets it over Bluetooth (bit 0 = L1, bit 1 = L2, bit 2 = L3).
+  // Applied to each sensor reading as it arrives, so everything downstream
+  // sees the meter's view. ESPHome-only: set by the Bluetooth component.
+  void set_phase_reversal(uint8_t bits);
+  uint8_t phase_reversal() const { return this->phase_reversal_; }
   // Used by mqtt_insights for the device-level "active_control" entity so
   // HA reflects the configured state instead of always reading "running".
   bool active_control() const { return this->active_control_; }
@@ -332,14 +382,25 @@ class CT002Component : public Component {
   void set_consumer_distribution_weight(const std::string &consumer_id, float weight);
   void set_consumer_efficiency_window_weight(const std::string &consumer_id, float weight);
   void set_consumer_min_dc_output(const std::string &consumer_id, float value);
+  void set_consumer_min_charge_power(const std::string &consumer_id, float value);
+  void set_consumer_min_discharge_power(const std::string &consumer_id, float value);
+  void set_consumer_max_charge_power(const std::string &consumer_id, float value);
+  void set_consumer_max_discharge_power(const std::string &consumer_id, float value);
+  // The MAX_CHARGE_POWER / MAX_DISCHARGE_POWER in effect for a battery (W):
+  // its own setting, else the global one, BATTERY_POWER_MAX for no limit.
+  float effective_max_charge_power(const std::string &consumer_id) const;
+  float effective_max_discharge_power(const std::string &consumer_id) const;
+  // The MIN_CHARGE_POWER / MIN_DISCHARGE_POWER in effect for a battery (W):
+  // its own setting, else the global one. Mirrors ct002.py.
+  float effective_min_charge_power(const std::string &consumer_id) const;
+  float effective_min_discharge_power(const std::string &consumer_id) const;
   void force_balancer_rotation();
 
-  // True when efficiency rotation is enabled (min_efficient_power > 0). Mirrors
+  // True when efficiency rotation is enabled in either direction
+  // (min_efficient_power, or its charge / discharge override, above 0). Mirrors
   // LoadBalancer.efficiency_rotation_enabled in the Python stack; used by
   // mqtt_insights to decide whether to surface the Force Rotation button.
-  bool efficiency_rotation_enabled() const {
-    return this->balancer_cfg_.min_efficient_power > 0.0f;
-  }
+  bool efficiency_rotation_enabled() const { return this->balancer_cfg_.efficiency_enabled(); }
 
   // How well the loop is holding the grid at zero (see ControlQualityTracker).
   // Mirrors CT002's use of LoadBalancer.control_quality in the Python stack;
@@ -444,6 +505,7 @@ class CT002Component : public Component {
   sensor::Sensor *power_sensor_l3_{nullptr};
   std::string ct_type_{"HME-4"};
   std::string ct_mac_;
+  std::string app_mac_fallback_;
   int wifi_rssi_{-50};
   uint16_t udp_port_{12345};
   bool active_control_{true};
@@ -471,6 +533,18 @@ class CT002Component : public Component {
   // Sensor input cache (written by per-sensor on_state callbacks).
   std::array<float, 3> raw_values_{0.0f, 0.0f, 0.0f};
   std::array<uint32_t, 3> raw_stamp_ms_{0, 0, 0};
+  // Optional grid voltage / frequency inputs and their latest readings.
+  std::array<sensor::Sensor *, 3> voltage_sensors_{nullptr, nullptr, nullptr};
+  sensor::Sensor *frequency_sensor_{nullptr};
+  std::array<float, 3> voltage_values_{0.0f, 0.0f, 0.0f};
+  std::array<uint32_t, 3> voltage_stamp_ms_{0, 0, 0};
+  float frequency_value_{0.0f};
+  uint32_t frequency_stamp_ms_{0};
+  optional<float> fresh_reading_(float value, uint32_t stamp_ms) const {
+    if (stamp_ms == 0 || ::esphome::millis() - stamp_ms > this->max_sensor_age_ms_) return {};
+    return value;
+  }
+  uint8_t phase_reversal_{0};
   uint8_t num_phases_{0};
 
   // Unit→W scale per phase (1.0 unless the YAML sensor declares kW/MW/mW —

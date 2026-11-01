@@ -106,6 +106,36 @@ inline constexpr const char *CONTROL_QUALITY_STATES[] = {"idle", "warmup", "stab
                                                          "off_target", "limited"};
 
 inline constexpr double EFFICIENCY_HYSTERESIS_FACTOR = 1.2;
+// How far (W) the smoothed signed demand must cross zero before the efficiency
+// pass takes the other direction's threshold (min_efficient_charge_power /
+// min_efficient_discharge_power), so a demand hovering at 0 W cannot switch
+// thresholds, and with them the active set, on meter noise. Mirrors
+// balancer.py EFFICIENCY_DIRECTION_DEADBAND_W.
+inline constexpr float EFFICIENCY_DIRECTION_DEADBAND_W = 50.0f;
+// Standby reserve (efficiency mode only). A battery outside the active set
+// ("standby": faded fully out, which includes a 0 % efficiency window weight
+// sunk to the tail) stays at 0 W until every battery ahead of it is out of
+// headroom in the demand's direction: at its learned ceiling, saturated, or
+// DC-only under a surplus. Then the standbys take only the overflow, one at a
+// time in rotation order, and give it back first when the demand falls (see
+// LoadBalancer::update_spill_). A spiller joins the share math with its weight
+// scaled by SPILL_WEIGHT per rank. Mirrors balancer.py.
+inline constexpr float SPILL_WEIGHT = 0.01f;
+inline constexpr float SPILL_MIN_DEMAND_W = 30.0f;
+// A spiller still carrying more than SPILL_HOLD_W once the batteries ahead
+// regain headroom is released only after SPILL_RELEASE_SECONDS.
+inline constexpr float SPILL_HOLD_W = 15.0f;
+inline constexpr double SPILL_RELEASE_SECONDS = 10.0;
+// An error this small against the spill direction is left to the regular
+// share instead of being unloaded from the spillers first.
+inline constexpr float SPILL_UNLOAD_DEADBAND_W = 30.0f;
+// Cap for a battery ahead that cannot move in the spill direction at all; above
+// zero, since a zero cap reads as "no cap" in the water-fill.
+inline constexpr float SPILL_MIN_CAP_W = 1e-3f;
+// Saturation grace for a standby joining from 0 W, so a slow starter (a DC-only
+// battery) is not capped where it stands, while an empty one is still passed
+// over within seconds.
+inline constexpr double SPILL_JOIN_GRACE_SECONDS = 20.0;
 inline constexpr double SATURATION_GRACE_SECONDS = 90.0;
 inline constexpr double SATURATION_STALL_TIMEOUT_SECONDS = 60.0;
 inline constexpr double SATURATION_REFERENCE_DT = 1.0;
@@ -220,6 +250,12 @@ struct BalancerConfig {
   // demand step that reacts at full gain. See balancer.py.
   float osc_damp_threshold{300.0f};
   float min_efficient_power{0.0f};
+  // Per-direction override of min_efficient_power (issue #642): the threshold
+  // the efficiency pass uses while the pool charges / discharges. Unset falls
+  // back to min_efficient_power; 0 turns efficiency rotation off in that
+  // direction only. See balancer.py BalancerConfig.efficient_power.
+  std::optional<float> min_efficient_charge_power{};
+  std::optional<float> min_efficient_discharge_power{};
   float probe_min_power{80.0f};
   float efficiency_rotation_interval{900.0f};
   float efficiency_fade_alpha{0.15f};
@@ -236,6 +272,23 @@ struct BalancerConfig {
   // Minimum net discharge (W) to keep an external-inverter DC battery awake.
   // 0 disables. See issue #425 and balancer.py.
   float min_dc_output{0.0f};
+  // Minimum charge / discharge (W) a battery runs at (issue #721): below it the
+  // battery idles at 0 W and the others, or the grid, cover its share. A
+  // battery's own setting (ConsumerReport) overrides these. 0 disables. See
+  // balancer.py _below_min_power.
+  float min_charge_power{0.0f};
+  float min_discharge_power{0.0f};
+  // How far (W) above its minimum a battery idling below it must be asked for
+  // before it starts again; unset = EFFICIENCY_HYSTERESIS_FACTOR times the
+  // minimum. See balancer.py _start_power.
+  std::optional<float> min_power_hysteresis{};
+  // Maximum charge / discharge (W) a battery is asked for: its command is
+  // capped there and the others, or the grid, take the rest. Unset (or
+  // BATTERY_POWER_MAX and above) is no limit; 0 keeps the battery out of that
+  // direction. A battery's own setting (ConsumerReport) overrides these. See
+  // balancer.py _max_power.
+  std::optional<float> max_charge_power{};
+  std::optional<float> max_discharge_power{};
   // Adaptive grid-state predictor: act on a predicted grid that credits the
   // pool's freshly-reported output between meter refreshes and trusts each
   // fresh meter sample by an online-learned amount, compensating for meter
@@ -259,6 +312,17 @@ struct BalancerConfig {
   float import_trim_w{15.0f};
 
   void clamp();
+  // The efficiency threshold (W) for a demand in *direction* (> 0 discharge,
+  // < 0 charge). Mirrors balancer.py BalancerConfig.efficient_power.
+  float efficient_power(int direction) const {
+    const auto &own = direction < 0 ? min_efficient_charge_power : min_efficient_discharge_power;
+    return own.has_value() ? *own : min_efficient_power;
+  }
+  // Whether efficiency rotation runs in either direction. Mirrors
+  // balancer.py BalancerConfig.efficiency_enabled.
+  bool efficiency_enabled() const {
+    return efficient_power(1) > 0.0f || efficient_power(-1) > 0.0f;
+  }
 };
 
 enum class ConsumerModeKind { AUTO, MANUAL, INACTIVE };
@@ -318,6 +382,9 @@ struct BalancerConsumerState {
   float ceiling_run_anchor{0.0f};
   double ceiling_run_since{0.0};
   int ceiling_run_polls{0};
+  // Idling at 0 W because its share fell below its minimum charge / discharge
+  // power (see below_min_power_); it resumes only past the hysteresis.
+  bool min_power_idle{false};
 
   // Learned ceiling in direction *sign* (+ discharge), 0 if none.
   float ceiling(int sign) const {
@@ -348,6 +415,7 @@ struct BalancerConsumerSnapshot {
   int pace_sign{0};
   float osc_score{0.0f};
   int osc_last_sign{0};
+  bool min_power_idle{false};
 };
 
 struct PredictorSnapshot {
@@ -413,6 +481,14 @@ struct ConsumerReport {
   // Mirrors the Python reports dict's "min_dc_output" key. Default-initialized
   // so aggregate ``ConsumerReport{...}`` init stays warning-clean.
   std::optional<float> min_dc_output{};
+  // Per-device MIN_CHARGE_POWER / MIN_DISCHARGE_POWER overrides (W); unset =
+  // inherit the global setting. Mirror the Python ConsumerReport fields.
+  std::optional<float> min_charge_power{};
+  std::optional<float> min_discharge_power{};
+  // Per-device MAX_CHARGE_POWER / MAX_DISCHARGE_POWER overrides (W); unset =
+  // inherit, BATTERY_POWER_MAX or more = no limit.
+  std::optional<float> max_charge_power{};
+  std::optional<float> max_discharge_power{};
 };
 
 using ReportMap = std::unordered_map<std::string, ConsumerReport>;
@@ -428,7 +504,7 @@ float saturation_floor(const BalancerConsumerState &state, const ConsumerReport 
 struct SteerLog {
   std::string consumer_id;
   std::string mode;      // "auto", "inactive", or "manual=<target>"
-  std::string rotation;  // "active", "deprioritized", or "probing"
+  std::string rotation;  // "active", "deprioritized", "overflow", or "probing"
   float weight{1.0f};
   float grid{0.0f};
   std::optional<float> control_grid{};
@@ -587,7 +663,7 @@ class LoadBalancer {
   // Absolute net-output target intended pre-pacing (see BalancerConsumerState).
   std::optional<float> get_last_intent(const std::string &consumer_id) const;
 
-  bool efficiency_rotation_enabled() const { return this->cfg_.min_efficient_power > 0.0f; }
+  bool efficiency_rotation_enabled() const { return this->cfg_.efficiency_enabled(); }
   // Per-consumer control state, or absent if the consumer was never steered.
   std::optional<BalancerConsumerSnapshot> snapshot_consumer(const std::string &consumer_id) const;
   // Whole-balancer control state. Pure attribute reads, like the Python
@@ -609,10 +685,21 @@ class LoadBalancer {
   int ceiling_retest_(const std::optional<std::string> &consumer_id, const ReportMap &reports,
                       const std::unordered_map<std::string, float> &eff_part,
                       float control_grid) const;
-  // Learned ceilings of *ids* in direction *sign*, where one is known. Mirrors
-  // balancer.py _ceilings.
+  // Ceilings of *ids* in direction *sign*, where one is known: the lower of a
+  // learned ceiling and the battery's maximum. Mirrors balancer.py _ceilings.
   template<typename Ids>
-  std::unordered_map<std::string, float> ceilings_(const Ids &ids, int sign) const;
+  std::unordered_map<std::string, float> ceilings_(const ReportMap &reports, const Ids &ids,
+                                                   int sign) const;
+  // The most *report*'s battery is asked for in direction *sign* (W), unset
+  // for no limit. Mirrors balancer.py _max_power.
+  std::optional<float> max_power_(const ConsumerReport &report, int sign) const;
+  // The share (W) at which a battery idling below *minimum* starts again.
+  // Mirrors balancer.py _start_power.
+  float start_power_(const ConsumerReport &report, int sign, float minimum) const;
+  // The ceiling *consumer_id* has in direction *sign*: the lower of its
+  // maximum and its learned ceiling. Mirrors balancer.py _limit.
+  std::optional<float> limit_(const ReportMap &reports, const std::string &consumer_id,
+                              int sign) const;
   // Consumers of *ids* already at their ceiling in direction *sign*. Mirrors
   // balancer.py _pinned.
   std::unordered_set<std::string> pinned_(const ReportMap &reports,
@@ -648,6 +735,15 @@ class LoadBalancer {
                                             const ReportMap &reports,
                                             std::array<float, 3> result);
 
+  // The least *report*'s battery may run at in direction *sign* (W); 0 = none.
+  // Mirrors balancer.py _min_power.
+  float min_power_(const ConsumerReport &report, int sign) const;
+  // The batteries that idle because their share is below their minimum, and
+  // each battery's min_power_idle updated. Mirrors balancer.py _below_min_power.
+  std::unordered_set<std::string> below_min_power_(
+      const ReportMap &reports, float demand_grid,
+      const std::unordered_map<std::string, float> &eff_part, bool exempt_spilling);
+
   std::array<float, 3> steer_to_zero_(const std::optional<std::string> &consumer_id,
                                       const ReportMap &reports, bool paced = false);
   // Turn an absolute net-output target into the phase vector to send: the tail
@@ -656,7 +752,9 @@ class LoadBalancer {
   // last_intent / last_intent_reading) and splits the scalar across phases.
   // *single_phase* puts the whole reading on that one phase instead of the
   // weighted split_by_phase_; *last_target* and *intent_reading* override what
-  // is recorded, for the steer-to-zero path. Mirrors balancer.py _emit.
+  // is recorded, for the steer-to-zero path. *desired* is capped at the
+  // battery's maximum first unless *limited* is false (a manual target).
+  // Mirrors balancer.py _emit.
   std::array<float, 3> emit_(const std::optional<std::string> &consumer_id,
                              NetOutputW desired, float reported,
                              const ReportMap &reports,
@@ -664,7 +762,8 @@ class LoadBalancer {
                              bool pace = false,
                              const std::string *single_phase = nullptr,
                              std::optional<float> last_target = std::nullopt,
-                             std::optional<float> intent_reading = std::nullopt);
+                             std::optional<float> intent_reading = std::nullopt,
+                             bool limited = true);
   static std::array<float, 3> split_by_phase_(
       float target, const ReportMap &reports,
       const std::unordered_map<std::string, float> *weights = nullptr);
@@ -695,10 +794,10 @@ class LoadBalancer {
                         const std::unordered_set<std::string> &charge_blind);
   // This consumer's weight-proportional slice of the grid error. Mirrors
   // balancer.py _fair_share.
-  static float fair_share_(const std::optional<std::string> &consumer_id,
+  float fair_share_(const std::optional<std::string> &consumer_id,
                            const ReportMap &reports, float control_grid,
                            const std::unordered_map<std::string, float> &eff_part,
-                           const std::unordered_set<std::string> &pinned);
+                           const std::unordered_set<std::string> &pinned) const;
   // Deadband concentration, or absent when it doesn't apply this tick. Mirrors
   // balancer.py _concentrated_share.
   std::optional<float> concentrated_share_(
@@ -739,12 +838,37 @@ class LoadBalancer {
   // Low-pass-filtered household demand driving the active-set decision.
   // Mirrors balancer.py _demand_estimate.
   float demand_estimate_(const ReportMap &reports, float grid_total);
+  // Which way the pool's demand runs, for the charge / discharge threshold.
+  // Mirrors balancer.py _update_demand_direction.
+  void update_demand_direction_(float raw_target, float alpha);
   // How many of *n* pooled batteries keep an active slot at *abs_target*.
   // Mirrors balancer.py _active_slots.
   size_t active_slots_(float abs_target, size_t n, bool was_limiting,
                        size_t prev_slots) const;
   bool maybe_force_swap_saturated_(std::vector<std::string> &priority, size_t slots,
-                                   double now);
+                                   double now, const ReportMap &reports, float grid_total);
+
+  // Standby reserve. Mirrors balancer.py _share_weight, _no_headroom,
+  // _clear_spill, _drop_spiller, _update_spill, _spill_takes, _spill_delivery,
+  // _spill_target and _unload_lifo.
+  float share_weight_(const ReportMap &reports, const std::string &consumer_id) const;
+  std::optional<float> no_headroom_(const std::string &consumer_id, const ReportMap &reports,
+                                    int sign,
+                                    const std::unordered_set<std::string> &charge_blind,
+                                    float margin) const;
+  void clear_spill_();
+  void drop_spiller_(const std::string &consumer_id);
+  void update_spill_(const ReportMap &reports, float control_grid,
+                     const std::unordered_map<std::string, float> &faded,
+                     const std::unordered_set<std::string> &charge_blind);
+  bool spilling_contains_(const std::string &consumer_id) const;
+  std::unordered_map<std::string, float> spill_takes_(const ReportMap &reports,
+                                                      float error) const;
+  float spill_delivery_(const ReportMap &reports, float grid_total) const;
+  std::array<float, 3> spill_target_(const std::string &consumer_id, const ReportMap &reports,
+                                     float error, bool hold);
+  float unload_lifo_(const std::string &consumer_id, const ReportMap &reports,
+                     float control_grid, const std::unordered_map<std::string, float> &eff_part);
   // Drop the control state of consumers that have left the pool. consumers_
   // runs parallel to priority_, so a consumer that stops reporting but still
   // holds a rotation slot keeps its state. Mirrors balancer.py _prune_pool.
@@ -762,6 +886,16 @@ class LoadBalancer {
   std::unordered_set<std::string> deprioritized_;
   std::vector<std::string> priority_;
   double last_rotation_;
+  // Standby reserve: the spilling standbys in rotation order, the direction
+  // they carry the overflow in, the caps standing in for a ceiling on the
+  // batteries ahead that are out of headroom for another reason, each
+  // spiller's share-weight scale (a per-tick map in place of rewriting the
+  // reports), and when a held spiller's batteries ahead regained headroom.
+  std::vector<std::string> spilling_;
+  int spill_dir_{0};
+  std::unordered_map<std::string, float> spill_caps_;
+  std::unordered_map<std::string, float> spill_scale_;
+  std::optional<double> spill_free_since_;
 
   // Efficiency cache. The Python side keys on (sample_id, tuple(priority_));
   // we serialize both into a single string to avoid templating an
@@ -807,6 +941,10 @@ class LoadBalancer {
   // Low-pass-filtered household-demand estimate for the efficiency active-set
   // decision (see compute_efficiency_deprioritized_). Unset until the first poll.
   std::optional<float> demand_ema_{};
+  // Signed twin of demand_ema_ and the direction it settled on (+1 discharge,
+  // -1 charge), which picks the efficiency threshold. Mirrors balancer.py.
+  std::optional<float> demand_signed_ema_{};
+  int demand_dir_{1};
   // Closed-loop quality verdict for HA (see ControlQualityTracker). Measured
   // against the balancer's own settling deadband, so it needs no setting.
   ControlQualityTracker control_quality_;

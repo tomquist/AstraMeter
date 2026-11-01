@@ -15,6 +15,10 @@ schema accepts grid-power sensor IDs and the cross-phase filter pipeline
 * `dashboard:` — serve AstraMeter's live status dashboard from the ESP32
   itself. On by default (ESP32 only); `dashboard: false` leaves it out of
   the firmware entirely, and the block is only needed to change an option.
+* `bluetooth:` — speak a real CT002/CT003's Bluetooth protocol, so the
+  Marstek app can add the device through its regular "Add device" flow and
+  show live data over BLE. On by default on ESP32 variants with Bluetooth;
+  `bluetooth: false` leaves the BLE stack out of the firmware.
 """
 
 from __future__ import annotations
@@ -28,7 +32,8 @@ from pathlib import Path
 import esphome.codegen as cg
 import esphome.config_validation as cv
 import esphome.final_validate as fv
-from esphome.components import http_request, sensor, web_server_base
+from esphome.components import esp32_ble, http_request, sensor, web_server_base
+from esphome.components.esp32 import get_esp32_variant
 from esphome.components.web_server_base import CONF_WEB_SERVER_BASE_ID
 from esphome.const import (
     CONF_ALPHA,
@@ -73,11 +78,17 @@ CloudReportingComponent = cloud_reporting_ns.class_(
 )
 dashboard_ns = ct002_ns.namespace("dashboard")
 DashboardComponent = dashboard_ns.class_("DashboardComponent", cg.Component)
+bluetooth_ns = ct002_ns.namespace("bluetooth")
+BluetoothComponent = bluetooth_ns.class_("BluetoothComponent", cg.Component)
 
 # Parent fields
 CONF_POWER_SENSOR_L1 = "power_sensor_l1"
 CONF_POWER_SENSOR_L2 = "power_sensor_l2"
 CONF_POWER_SENSOR_L3 = "power_sensor_l3"
+CONF_VOLTAGE_SENSOR_L1 = "voltage_sensor_l1"
+CONF_VOLTAGE_SENSOR_L2 = "voltage_sensor_l2"
+CONF_VOLTAGE_SENSOR_L3 = "voltage_sensor_l3"
+CONF_FREQUENCY_SENSOR = "frequency_sensor"
 CONF_CT_TYPE = "ct_type"
 CONF_CT_MAC = "ct_mac"
 CONF_WIFI_RSSI = "wifi_rssi"
@@ -124,12 +135,22 @@ CONF_OSC_DAMP_ALPHA = "osc_damp_alpha"
 CONF_OSC_DAMP_DECAY = "osc_damp_decay"
 CONF_OSC_DAMP_THRESHOLD = "osc_damp_threshold"
 CONF_MIN_EFFICIENT_POWER = "min_efficient_power"
+CONF_MIN_EFFICIENT_CHARGE_POWER = "min_efficient_charge_power"
+CONF_MIN_EFFICIENT_DISCHARGE_POWER = "min_efficient_discharge_power"
 CONF_PROBE_MIN_POWER = "probe_min_power"
 CONF_EFFICIENCY_ROTATION_INTERVAL = "efficiency_rotation_interval"
 CONF_EFFICIENCY_FADE_ALPHA = "efficiency_fade_alpha"
 CONF_EFFICIENCY_SATURATION_THRESHOLD = "efficiency_saturation_threshold"
 CONF_EFFICIENCY_DEMAND_ALPHA = "efficiency_demand_alpha"
 CONF_MIN_DC_OUTPUT = "min_dc_output"
+CONF_MIN_CHARGE_POWER = "min_charge_power"
+CONF_MIN_DISCHARGE_POWER = "min_discharge_power"
+CONF_MIN_POWER_HYSTERESIS = "min_power_hysteresis"
+CONF_MAX_CHARGE_POWER = "max_charge_power"
+CONF_MAX_DISCHARGE_POWER = "max_discharge_power"
+# Upper bound of a per-battery power setting (W): a three-phase connection on
+# the default 16 A fuse. Mirrors BATTERY_POWER_MAX in controls.{h,py}.
+BATTERY_POWER_MAX = 3 * 230.0 * 16.0
 CONF_GRID_PREDICT_TRUST = "grid_predict_trust"
 CONF_CONCENTRATE_DEADBAND = "concentrate_deadband"
 CONF_IMPORT_TRIM_W = "import_trim_w"
@@ -158,6 +179,11 @@ _POWER_SENSOR_KEYS = (
     CONF_POWER_SENSOR_L1,
     CONF_POWER_SENSOR_L2,
     CONF_POWER_SENSOR_L3,
+)
+_VOLTAGE_SENSOR_KEYS = (
+    CONF_VOLTAGE_SENSOR_L1,
+    CONF_VOLTAGE_SENSOR_L2,
+    CONF_VOLTAGE_SENSOR_L3,
 )
 
 
@@ -202,6 +228,24 @@ def _validate_power_unit(conf_key: str, sensor_id, unit: str | None) -> None:
             f"in watts. Point it at a sensor reporting {accepted} "
             f"(kW-style units are converted to W automatically), or scale "
             f"the value to W and declare 'W'.",
+            path=[conf_key],
+        )
+
+
+def _validate_grid_unit(
+    conf_key: str, sensor_id, unit: str | None, expected: str
+) -> None:
+    """Raise cv.Invalid when an optional grid sensor declares another unit.
+
+    The voltage and frequency inputs are reported as they come, so a sensor
+    in mV or kHz would put a nonsense reading in front of the app and the
+    cloud. Sensors that declare no unit are taken as V / Hz.
+    """
+    if unit and unit != expected:
+        raise cv.Invalid(
+            f"{conf_key} '{sensor_id}' declares unit_of_measurement '{unit}', "
+            f"but ct002 reads it in {expected}. Point it at a sensor reporting "
+            f"{expected}, or scale the value and declare '{expected}'.",
             path=[conf_key],
         )
 
@@ -437,6 +481,17 @@ def _final_validate(config):
             _validate_power_unit(
                 conf_key, config[conf_key], _declared_unit(full, config[conf_key])
             )
+    for conf_key, expected in (
+        *((key, "V") for key in _VOLTAGE_SENSOR_KEYS),
+        (CONF_FREQUENCY_SENSOR, "Hz"),
+    ):
+        if conf_key in config:
+            _validate_grid_unit(
+                conf_key,
+                config[conf_key],
+                _declared_unit(full, config[conf_key]),
+                expected,
+            )
     _final_validate_dashboard_path(config, full)
     # Strictly after the path is settled: the link points at wherever the
     # dashboard ended up.
@@ -536,6 +591,9 @@ BALANCER_SCHEMA = cv.Schema(
         ),
         cv.Optional(CONF_OSC_DAMP_THRESHOLD, default=300.0): cv.float_range(min=0.0),
         cv.Optional(CONF_MIN_EFFICIENT_POWER, default=0.0): cv.float_range(min=0.0),
+        # Unset = min_efficient_power; 0 = no efficiency rotation that way.
+        cv.Optional(CONF_MIN_EFFICIENT_CHARGE_POWER): cv.float_range(min=0.0),
+        cv.Optional(CONF_MIN_EFFICIENT_DISCHARGE_POWER): cv.float_range(min=0.0),
         cv.Optional(CONF_PROBE_MIN_POWER, default=80.0): cv.float_range(min=0.0),
         cv.Optional(
             CONF_EFFICIENCY_ROTATION_INTERVAL, default="15min"
@@ -550,6 +608,23 @@ BALANCER_SCHEMA = cv.Schema(
             min=0.01, max=1.0
         ),
         cv.Optional(CONF_MIN_DC_OUTPUT, default=0.0): cv.float_range(min=0.0),
+        cv.Optional(CONF_MIN_CHARGE_POWER, default=0.0): cv.float_range(
+            min=0.0, max=BATTERY_POWER_MAX
+        ),
+        cv.Optional(CONF_MIN_DISCHARGE_POWER, default=0.0): cv.float_range(
+            min=0.0, max=BATTERY_POWER_MAX
+        ),
+        # Unset = start again at 1.2x the minimum.
+        cv.Optional(CONF_MIN_POWER_HYSTERESIS): cv.float_range(
+            min=0.0, max=BATTERY_POWER_MAX
+        ),
+        # Unset = no limit; 0 keeps a battery out of that direction.
+        cv.Optional(CONF_MAX_CHARGE_POWER): cv.float_range(
+            min=0.0, max=BATTERY_POWER_MAX
+        ),
+        cv.Optional(CONF_MAX_DISCHARGE_POWER): cv.float_range(
+            min=0.0, max=BATTERY_POWER_MAX
+        ),
         cv.Optional(CONF_GRID_PREDICT_TRUST, default=0.5): cv.float_range(
             min=0.0, max=1.0
         ),
@@ -689,11 +764,13 @@ CLOUD_REPORTING_SCHEMA = cv.All(
             ),
             cv.Optional(CONF_HOST, default="eu.hamedata.com"): cv.string_strict,
             cv.Optional(CONF_FCV, default="202409090159"): cv.string_strict,
-            # getDateInfo writes sv -> the cloud record's version field, so it
-            # defaults to the version managed devices are registered with (121).
-            cv.Optional(CONF_SV, default=121): cv.int_,
+            # The firmware version sent as `sv` in the handshake. Unset, it is
+            # the one a cloud-reporting CT of the configured model runs (HME-4
+            # v124, HME-3 v122), as a real one sends.
+            cv.Optional(CONF_SV): cv.int_range(min=0),
+            # A real CT waits 300 s after an accepted report.
             cv.Optional(
-                CONF_INTERVAL, default="60s"
+                CONF_INTERVAL, default="300s"
             ): cv.positive_time_period_milliseconds,
         }
     ),
@@ -849,6 +926,82 @@ def _resolve_dashboard(config):
     return config
 
 
+# ────────────────────────────────────────────────────────────────────────
+# Sub-block: bluetooth (a real CT's BLE interface for the Marstek app; opt-out)
+# ────────────────────────────────────────────────────────────────────────
+
+CONF_BLUETOOTH = "bluetooth"
+CONF_ALLOW_WIFI_CHANGE = "allow_wifi_change"
+CONF_ALLOW_DIRECTION_CHANGE = "allow_direction_change"
+
+
+# No radio of its own: Bluetooth only through a companion chip
+# (esp32_hosted), which a config has to set up deliberately — so no default.
+_NO_DEFAULT_BLUETOOTH_VARIANTS = ("ESP32P4",)
+
+
+def _bluetooth_supported() -> bool:
+    """True on ESP32 variants with a Bluetooth radio of their own.
+
+    That is all but the S2 (esp32_ble refuses it) and the P4 (no radio).
+    """
+    if not CORE.is_esp32:
+        return False
+    try:
+        esp32_ble.validate_variant(None)
+        variant = get_esp32_variant()
+    except cv.Invalid:
+        return False
+    except KeyError:
+        # Variant not recorded (only outside a real config run): assume the
+        # classic ESP32, which has Bluetooth.
+        return True
+    return variant not in _NO_DEFAULT_BLUETOOTH_VARIANTS
+
+
+def _bluetooth_shorthand(value):
+    """`bluetooth:` and `bluetooth: true` mean "on"."""
+    if value is None or _dashboard_toggle(value) is True:
+        return {}
+    return value
+
+
+BLUETOOTH_SCHEMA = cv.All(
+    _bluetooth_shorthand,
+    cv.Schema(
+        {
+            cv.GenerateID(): cv.declare_id(BluetoothComponent),
+            cv.GenerateID(esp32_ble.CONF_BLE_ID): cv.use_id(esp32_ble.ESP32BLE),
+            # Off by default: the board answers the app's Wi-Fi step but
+            # stays on the YAML's networks, so a phone in Bluetooth range
+            # can't move it to another network. true applies what it sends.
+            cv.Optional(CONF_ALLOW_WIFI_CHANGE, default=False): cv.boolean,
+            # Off by default: reversing a phase's measured power changes what
+            # the batteries do, and any phone in range may ask for it. true
+            # lets the app's "Reverse Measurement Direction" apply (CT002).
+            cv.Optional(CONF_ALLOW_DIRECTION_CHANGE, default=False): cv.boolean,
+        }
+    ).extend(cv.COMPONENT_SCHEMA),
+    cv.only_on([PLATFORM_ESP32]),
+)
+
+
+def _resolve_bluetooth(config):
+    """Settle whether the device gets a Bluetooth interface at all.
+
+    Same shape as _resolve_dashboard: an absent key becomes the default block
+    where the hardware has Bluetooth, and only `bluetooth: false` removes it,
+    so the key is present exactly when the BLE stack is wanted.
+    """
+    if not isinstance(config, dict):
+        return config
+    if _dashboard_toggle(config.get(CONF_BLUETOOTH)) is False:
+        del config[CONF_BLUETOOTH]
+    elif CONF_BLUETOOTH not in config and _bluetooth_supported():
+        config[CONF_BLUETOOTH] = {}
+    return config
+
+
 def AUTO_LOAD(config):
     """Components pulled in on the user's behalf.
 
@@ -870,6 +1023,8 @@ def AUTO_LOAD(config):
     loads = ["socket", "json", "md5"]
     if isinstance(config, dict) and CONF_DASHBOARD in config:
         loads.append("web_server_base")
+    if isinstance(config, dict) and CONF_BLUETOOTH in config:
+        loads.extend(["esp32_ble", "esp32_ble_server"])
     return loads
 
 
@@ -980,12 +1135,19 @@ def _astrameter_git_commit() -> str:
 
 CONFIG_SCHEMA = cv.All(
     _resolve_dashboard,
+    _resolve_bluetooth,
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(CT002Component),
             cv.Required(CONF_POWER_SENSOR_L1): cv.use_id(sensor.Sensor),
             cv.Optional(CONF_POWER_SENSOR_L2): cv.use_id(sensor.Sensor),
             cv.Optional(CONF_POWER_SENSOR_L3): cv.use_id(sensor.Sensor),
+            # Optional grid readings AstraMeter doesn't steer on: the
+            # CT002's Bluetooth diagnostics and cloud reporting report them.
+            cv.Optional(CONF_VOLTAGE_SENSOR_L1): cv.use_id(sensor.Sensor),
+            cv.Optional(CONF_VOLTAGE_SENSOR_L2): cv.use_id(sensor.Sensor),
+            cv.Optional(CONF_VOLTAGE_SENSOR_L3): cv.use_id(sensor.Sensor),
+            cv.Optional(CONF_FREQUENCY_SENSOR): cv.use_id(sensor.Sensor),
             cv.Optional(CONF_CT_TYPE, default="HME-4"): cv.one_of(
                 "HME-4", "HME-3", upper=True
             ),
@@ -1023,6 +1185,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_MARSTEK_REGISTRATION): MARSTEK_REGISTRATION_SCHEMA,
             cv.Optional(CONF_CLOUD_REPORTING): CLOUD_REPORTING_SCHEMA,
             cv.Optional(CONF_DASHBOARD): DASHBOARD_SCHEMA,
+            cv.Optional(CONF_BLUETOOTH): BLUETOOTH_SCHEMA,
         }
     ).extend(cv.COMPONENT_SCHEMA),
     _validate_three_phase_sensors,
@@ -1040,6 +1203,13 @@ async def to_code(config):
         sensor_l3 = await cg.get_variable(config[CONF_POWER_SENSOR_L3])
         cg.add(var.set_power_sensor_l2(sensor_l2))
         cg.add(var.set_power_sensor_l3(sensor_l3))
+    for idx, conf_key in enumerate(_VOLTAGE_SENSOR_KEYS):
+        if conf_key in config:
+            voltage = await cg.get_variable(config[conf_key])
+            cg.add(var.set_voltage_sensor(idx, voltage))
+    if CONF_FREQUENCY_SENSOR in config:
+        frequency = await cg.get_variable(config[CONF_FREQUENCY_SENSOR])
+        cg.add(var.set_frequency_sensor(frequency))
 
     # Unit → watts conversion (issue #572). A declared power unit yields a
     # per-phase scale; declaring any unit (even W) also disables the runtime
@@ -1102,8 +1272,7 @@ async def to_code(config):
         return float(value.total_seconds if hasattr(value, "total_seconds") else value)
 
     bal = config.get(CONF_BALANCER, {})
-    bcfg = cg.StructInitializer(
-        BalancerConfig,
+    bcfg_fields = [
         ("fair_distribution", bal.get(CONF_FAIR_DISTRIBUTION, True)),
         ("balance_gain", bal.get(CONF_BALANCE_GAIN, 0.2)),
         ("balance_deadband", bal.get(CONF_BALANCE_DEADBAND, 25.0)),
@@ -1131,10 +1300,33 @@ async def to_code(config):
         ),
         ("efficiency_demand_alpha", bal.get(CONF_EFFICIENCY_DEMAND_ALPHA, 0.1)),
         ("min_dc_output", bal.get(CONF_MIN_DC_OUTPUT, 0.0)),
+        ("min_charge_power", bal.get(CONF_MIN_CHARGE_POWER, 0.0)),
+        ("min_discharge_power", bal.get(CONF_MIN_DISCHARGE_POWER, 0.0)),
         ("grid_predict_trust", bal.get(CONF_GRID_PREDICT_TRUST, 0.5)),
         ("concentrate_deadband", bal.get(CONF_CONCENTRATE_DEADBAND, 60.0)),
         ("import_trim_w", bal.get(CONF_IMPORT_TRIM_W, 15.0)),
-    )
+    ]
+    # Unset = the fallback / default start point / no limit: the C++ fields
+    # are std::optional and stay empty. Each group goes right after the field
+    # it follows in the struct, since designated initializers must keep the
+    # struct's declaration order.
+    for after, keys in (
+        (
+            "min_efficient_power",
+            (CONF_MIN_EFFICIENT_CHARGE_POWER, CONF_MIN_EFFICIENT_DISCHARGE_POWER),
+        ),
+        (
+            "min_discharge_power",
+            (
+                CONF_MIN_POWER_HYSTERESIS,
+                CONF_MAX_CHARGE_POWER,
+                CONF_MAX_DISCHARGE_POWER,
+            ),
+        ),
+    ):
+        at = 1 + next(i for i, (k, _) in enumerate(bcfg_fields) if k == after)
+        bcfg_fields[at:at] = [(key, bal[key]) for key in keys if key in bal]
+    bcfg = cg.StructInitializer(BalancerConfig, *bcfg_fields)
     cg.add(var.set_balancer_config(bcfg))
 
     sat = config.get(CONF_SATURATION, {})
@@ -1157,6 +1349,8 @@ async def to_code(config):
         await _to_code_cloud_reporting(config, var)
     if CONF_DASHBOARD in config:
         await _to_code_dashboard(config, var)
+    if CONF_BLUETOOTH in config:
+        await _to_code_bluetooth(config, var)
 
 
 async def _to_code_mqtt_insights(config, ct002_var):
@@ -1198,6 +1392,14 @@ async def _to_code_mqtt_insights(config, ct002_var):
     # Reported as the HA discovery `origin` block's sw_version, the way the
     # Python stack reports its own SHA there.
     cg.add(var.set_git_commit(_astrameter_git_commit()))
+    # What `mqtt: idf_send_async: true` turns on: ESPHome's ESP32 MQTT client
+    # otherwise publishes synchronously, and a publish into a connection the
+    # broker has just reset blocks until esp-mqtt's 10 s network timeout. Ours
+    # run from ct002's poll-reply listeners, inside ct002's loop(), so a flaky
+    # broker would stall the main loop until the task watchdog reset the
+    # board. Queued, ESPHome's own MQTT task waits out the timeout instead.
+    if CORE.is_esp32:
+        cg.add_define("USE_MQTT_IDF_ENQUEUE")
 
 
 async def _to_code_marstek_registration(config, ct002_var):
@@ -1232,9 +1434,10 @@ async def _to_code_cloud_reporting(config, ct002_var):
     """Codegen for the optional `cloud_reporting:` sub-block.
 
     Mirrors src/astrameter/cloud_reporting.py: a loop()-driven state machine
-    that runs the getDateInfo handshake once, then periodically GETs
-    setCtReporting with live CT data. Plain HTTP via the http_request
-    component; reads grid/bucket data from the parent ct002 via set_ct002().
+    that runs the getDateInfo handshake, GETs setCtReporting with live CT data
+    and waits the interval, the cycle a real CT runs. Plain HTTP via the
+    http_request component; reads grid/bucket data from the parent ct002 via
+    set_ct002().
     """
     sub = config[CONF_CLOUD_REPORTING]
     # Gate the cloud_reporting runtime .cpp on this define — the URL builders
@@ -1250,7 +1453,8 @@ async def _to_code_cloud_reporting(config, ct002_var):
 
     cg.add(var.set_host(sub[CONF_HOST]))
     cg.add(var.set_fcv(sub[CONF_FCV]))
-    cg.add(var.set_sv(sub[CONF_SV]))
+    if CONF_SV in sub:
+        cg.add(var.set_sv(sub[CONF_SV]))
     cg.add(var.set_interval_ms(int(sub[CONF_INTERVAL].total_milliseconds)))
 
 
@@ -1287,3 +1491,29 @@ async def _to_code_dashboard(config, ct002_var):
     cg.add(var.set_git_commit(_astrameter_git_commit()))
     logger_config = CORE.config.get("logger") or {}
     cg.add(var.set_log_level(str(logger_config.get("level", ""))))
+
+
+async def _to_code_bluetooth(config, ct002_var):
+    """Codegen for the `bluetooth:` sub-block (on by default on ESP32).
+
+    The GATT service rides on esp32_ble_server, which AUTO_LOAD pulls in. The
+    component also registers for raw GATTS events, only to learn the MTU each
+    connection negotiates. configure_identity() runs in the generated setup
+    code after every ct002 setter above, so it sees the configured CT type and
+    MAC, and before esp32_ble brings the stack up, which is when the
+    advertised name is read.
+    """
+    sub = config[CONF_BLUETOOTH]
+    cg.add_define("USE_CT002_BLUETOOTH")
+    var = cg.new_Pvariable(sub[CONF_ID])
+    await cg.register_component(var, sub)
+    cg.add(var.set_ct002(ct002_var))
+    ble = await cg.get_variable(sub[esp32_ble.CONF_BLE_ID])
+    cg.add(var.set_ble(ble))
+    if CONF_MARSTEK_REGISTRATION in config:
+        registration = await cg.get_variable(config[CONF_MARSTEK_REGISTRATION][CONF_ID])
+        cg.add(var.set_registration(registration))
+    cg.add(var.set_allow_wifi_change(sub[CONF_ALLOW_WIFI_CHANGE]))
+    cg.add(var.set_allow_direction_change(sub[CONF_ALLOW_DIRECTION_CHANGE]))
+    esp32_ble.register_gatts_event_handler(ble, var)
+    cg.add(var.configure_identity())

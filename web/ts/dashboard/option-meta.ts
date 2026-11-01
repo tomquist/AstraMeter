@@ -319,6 +319,24 @@ export const OPTION_META: Record<string, OptionMeta> = {
       "much, rather than running them all at a trickle. 0 keeps them all on.",
     placeholder: "0",
   },
+  min_efficient_charge_power: {
+    label: "Minimum efficient charge power (W)",
+    group: CONTROL,
+    help:
+      "The minimum efficient power while charging, per battery: with two, " +
+      "1200 keeps charging on one until the surplus reaches about 2880 W. " +
+      "0 keeps them all on while charging. Unlike the minimum charge power, " +
+      "it leaves one running.",
+    placeholder: "(minimum efficient power)",
+  },
+  min_efficient_discharge_power: {
+    label: "Minimum efficient discharge power (W)",
+    group: CONTROL,
+    help:
+      "The minimum efficient power while discharging. 0 keeps them all on " +
+      "while discharging. Unlike the minimum discharge power, one always runs.",
+    placeholder: "(minimum efficient power)",
+  },
   efficiency_rotation_interval: {
     label: "Rotation interval (s)",
     group: CONTROL,
@@ -333,6 +351,51 @@ export const OPTION_META: Record<string, OptionMeta> = {
       "does not shut off at 0 W and fall asleep under heavy solar. 20 or more " +
       "if you need it; 0 is off.",
     placeholder: "0",
+  },
+  min_discharge_power: {
+    label: "Minimum discharge power (W)",
+    group: CONTROL,
+    help:
+      "A battery is least efficient at a few watts. Below this share of the " +
+      "demand it stays idle and the grid or the other batteries cover it; it " +
+      "resumes 20% above. A battery can override it on the Batteries tab.",
+    placeholder: "0",
+  },
+  min_charge_power: {
+    label: "Minimum charge power (W)",
+    group: CONTROL,
+    help:
+      "Below this share of the solar surplus a battery stays idle and the " +
+      "surplus goes to the other batteries or the grid. Storing even a small " +
+      "surplus usually pays more than exporting it, so 0 is usually right.",
+    placeholder: "0",
+  },
+  min_power_hysteresis: {
+    label: "Minimum power hysteresis (W)",
+    group: CONTROL,
+    help:
+      "How far above its minimum an idle battery's share must reach before " +
+      "it starts again. Minimum discharge 30 with 20 here: it starts at 50 W " +
+      "and stops at 30 W.",
+    placeholder: "(20% of the minimum)",
+  },
+  max_discharge_power: {
+    label: "Maximum discharge power (W)",
+    group: CONTROL,
+    help:
+      "The most a battery discharges at; the others or the grid cover the " +
+      "rest. 0 keeps it from discharging. A battery can override it on the " +
+      "Batteries tab, where 11040 means no limit.",
+    placeholder: "(no limit)",
+  },
+  max_charge_power: {
+    label: "Maximum charge power (W)",
+    group: CONTROL,
+    help:
+      "The most a battery charges at; the others take the rest of the " +
+      "surplus, or it is exported. 0 keeps it from charging, for example to " +
+      "hold its charge for later.",
+    placeholder: "(no limit)",
   },
   saturation_grace_seconds: {
     label: "Probe window (s)",
@@ -445,20 +508,20 @@ export const OPTION_META: Record<string, OptionMeta> = {
     label: "PID proportional",
     group: FILTERS,
     help:
-      "Layers a net-zero PID controller on top of the meter reading. 0 is " +
-      "off; 0.5 is a safe start with a single battery.",
+      "Makes the battery react less strongly to each reading. 0 is off; " +
+      "use 0–1 and start at 0.5. Not needed with active control.",
     placeholder: "0",
   },
   pid_ki: {
     label: "PID integral",
     group: FILTERS,
-    help: "Integral gain. Usually left at 0 — it risks winding up.",
+    help: "Leave at 0 — above 0 it gradually pushes the grid away from zero.",
     placeholder: "0",
   },
   pid_kd: {
     label: "PID derivative",
     group: FILTERS,
-    help: "Derivative gain. Usually left at 0 — it is noisy on a real meter.",
+    help: "Leave at 0 — it tends to make swinging worse.",
     placeholder: "0",
   },
   pid_output_max: {
@@ -471,8 +534,8 @@ export const OPTION_META: Record<string, OptionMeta> = {
     label: "PID mode",
     group: FILTERS,
     help:
-      "bias adds the PID's output to the meter reading (recommended); " +
-      "replace steers on the PID output alone.",
+      "Leave at bias. replace sends only the PID's output, which makes " +
+      "the battery react the wrong way.",
   },
 
   // ── balancer tuning ──
@@ -620,7 +683,7 @@ export const OPTION_META: Record<string, OptionMeta> = {
     label: "Cloud interval (s)",
     group: CLOUD,
     help: "How often a report is sent.",
-    placeholder: "60",
+    placeholder: "300",
   },
 
   // ── add-on and dashboard ──

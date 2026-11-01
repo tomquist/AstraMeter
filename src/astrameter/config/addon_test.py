@@ -12,6 +12,7 @@ from astrameter.config.settings import CtSettings, GeneralSettings
 from astrameter.powermeter import HomeAssistant, ThrottledPowermeter
 from astrameter.powermeter.wrappers.base import PowermeterWrapper
 from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
+from astrameter.powermeter.wrappers.last_reading import LastReadingPowermeter
 
 
 class FakeSupervisor(addon.SupervisorClient):
@@ -97,9 +98,13 @@ def test_ct_settings_are_typed_values_not_strings() -> None:
             "active_control": False,
             "peakshaving_threshold": 2500,
             "min_efficient_power": 100,
+            "min_efficient_charge_power": 1200,
             "grid_predict_trust": 0.25,
             "fair_distribution": True,
             "import_trim_w": 12.5,
+            "min_charge_power": 30,
+            "min_discharge_power": 50,
+            "max_charge_power": 600,
             "saturation_grace_seconds": 200,
             "saturation_stall_timeout_seconds": 180,
             "pace_base_step": 40,
@@ -113,9 +118,15 @@ def test_ct_settings_are_typed_values_not_strings() -> None:
     assert ct.peakshaving_threshold == 2500.0
     assert isinstance(ct.peakshaving_threshold, float)
     assert ct.min_efficient_power == 100
+    assert ct.min_efficient_charge_power == 1200.0
+    assert ct.min_efficient_discharge_power is None
     assert ct.grid_predict_trust == 0.25
     assert ct.fair_distribution is True
     assert ct.import_trim_w == 12.5
+    assert ct.min_charge_power == 30.0
+    assert ct.min_discharge_power == 50.0
+    assert ct.max_charge_power == 600.0
+    assert ct.max_discharge_power is None
     assert ct.saturation_grace_seconds == 200.0
     assert ct.saturation_stall_timeout_seconds == 180.0
     assert ct.pace_base_step == 40
@@ -174,7 +185,9 @@ def test_single_power_entity_is_read_directly() -> None:
     cfg = config(BASE_OPTIONS)
     meter = cfg.powermeters(cfg.general())[0][0]
     assert isinstance(meter, HealthTrackingPowermeter)
-    source = meter.wrapped_powermeter
+    shared = meter.wrapped_powermeter
+    assert isinstance(shared, LastReadingPowermeter)
+    source = shared.wrapped_powermeter
     assert isinstance(source, HomeAssistant)
     assert source.power_calculate is False
     assert source.current_power_entity == ["sensor.current_power_in"]
@@ -183,10 +196,12 @@ def test_single_power_entity_is_read_directly() -> None:
 
 
 def _inner_source(cfg: addon.AddonAppConfig) -> HomeAssistant:
-    """The Home Assistant source under the health wrapper the loader adds."""
+    """The Home Assistant source under the wrappers the loader always adds."""
     meter = cfg.powermeters(cfg.general())[0][0]
     assert isinstance(meter, HealthTrackingPowermeter)
-    source = meter.wrapped_powermeter
+    shared = meter.wrapped_powermeter
+    assert isinstance(shared, LastReadingPowermeter)
+    source = shared.wrapped_powermeter
     assert isinstance(source, HomeAssistant)
     return source
 
@@ -244,6 +259,7 @@ def test_power_source_is_conditioned_by_the_options() -> None:
         "HampelPowermeter",
         "ThrottledPowermeter",
         "TransformedPowermeter",
+        "LastReadingPowermeter",
     ]
 
 

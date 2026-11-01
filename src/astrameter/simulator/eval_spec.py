@@ -36,6 +36,10 @@ class BatterySpec:
     # charge). Non-zero models a system already in motion, which the firmware
     # input deadband treats differently from rest.
     initial_power: float = 0.0
+    # Per-battery user controls (1.0 = neutral): Distribution Weight and
+    # Efficiency Window Weight.
+    distribution_weight: float = 1.0
+    efficiency_window_weight: float = 1.0
 
     @property
     def ac_chargeable(self) -> bool:
@@ -82,6 +86,11 @@ class Scenario:
     def peakshaving_threshold(self) -> float:
         """The CT's peak shaving threshold (W) for this scenario; 0 = off."""
         return float(self.ct_kwargs.get("peakshaving_threshold", 0.0))
+
+    @property
+    def min_discharge_power(self) -> float:
+        """The batteries' minimum discharge (W) for this scenario; 0 = off."""
+        return float(self.ct_kwargs.get("min_discharge_power", 0.0))
 
 
 @dataclass

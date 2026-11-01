@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.5.0
+
+- **Added** separate efficiency-mode thresholds for charging and discharging, so two batteries can share discharging early while charging stays on one battery until the surplus is large. Set `MIN_EFFICIENT_CHARGE_POWER` and/or `MIN_EFFICIENT_DISCHARGE_POWER` ([#642](https://github.com/tomquist/astrameter/issues/642), [#755](https://github.com/tomquist/astrameter/pull/755)).
+
+- **Added** a minimum and maximum charge and discharge power per battery, so a battery stays idle instead of running at a few watts where it is least efficient, or is held below a limit you can change live. Set `MIN_*_POWER` / `MAX_*_POWER` and optionally `MIN_POWER_HYSTERESIS`, or per battery in Home Assistant ([#721](https://github.com/tomquist/astrameter/issues/721), [#752](https://github.com/tomquist/astrameter/pull/752)).
+
+- **Fixed** the ESP32 build with MQTT Insights restarting itself while the MQTT broker kept dropping the connection; the meter now keeps answering the batteries through the drops ([#748](https://github.com/tomquist/astrameter/pull/748)).
+
+- **Fixed** the Marstek app being told firmware version 148 for the emulated CT002/CT003 over MQTT; it now gets the same version a real one reports, 124 for CT002 and 122 for CT003 ([#749](https://github.com/tomquist/astrameter/pull/749)).
+
+- **Fixed** the ESP32 build briefly ignoring the batteries every five minutes while cloud reporting was on, because each report held up the meter for a few seconds; it now reports in the background ([#749](https://github.com/tomquist/astrameter/pull/749)).
+
+- **Improved** efficiency mode (`MIN_EFFICIENT_POWER`): when the running battery reaches its power limit or is full or empty, an idle battery now covers the rest instead of the house importing or exporting it. A 0 % Efficiency Window Weight now makes a battery a backup that covers what the others can't; to keep a battery out entirely, set its Distribution Weight to 0 or switch it inactive instead. ([#751](https://github.com/tomquist/astrameter/pull/751))
+
+- **Added** answers to the Marstek app's CT002 **Diagnose** on the ESP32 build: it passes while the board receives meter readings, and fails once they stop, instead of ending in a communication error. To report your real grid voltage and frequency, there and in cloud reporting, set `voltage_sensor_l1`–`l3` and `frequency_sensor` under `ct002:` ([#746](https://github.com/tomquist/astrameter/pull/746)).
+
+- **Added** Bluetooth to the ESP32 build, so the Marstek app adds the board like a real CT002/CT003, with no Marstek login, and shows its live grid power. Set `bluetooth: false` under `ct002:` on a board short of memory ([#713](https://github.com/tomquist/astrameter/pull/713)).
+
+- **Fixed** cloud reporting showing twice the real grid power in the Marstek app's device list; reports now also carry the time slot, date and energy totals the way a real CT002/CT003 does, every five minutes. If you set a cloud reporting interval, remove it to use the real CT's 300 seconds ([#744](https://github.com/tomquist/astrameter/pull/744), [#747](https://github.com/tomquist/astrameter/pull/747)).
+
+- **Fixed** the Marstek app and cloud reporting sending extra requests to a polled power meter, such as a Shelly or an HTTP source, on top of the batteries' own polls; they now reuse the batteries' latest reading ([#698](https://github.com/tomquist/astrameter/pull/698)).
+
 ## 2.4.0
 
 - **Added** a Marstek CT002 / CT003 power source (`[MARSTEK_METER]`), so AstraMeter can read the Marstek CT you already own and steer your batteries itself. Pair the batteries with AstraMeter's CT instead of the real one ([#737](https://github.com/tomquist/astrameter/pull/737)).

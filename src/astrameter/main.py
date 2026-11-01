@@ -11,6 +11,7 @@ from astrameter.cloud_reporting import (
     CloudReporter,
     CloudReporterConfig,
     CtMeasurement,
+    reporting_firmware_version,
 )
 from astrameter.config import addon
 from astrameter.config.config_loader import ClientFilter
@@ -65,10 +66,16 @@ async def read_ct_powermeter(
     return three_phases(await read_fresh(configured))
 
 
-async def _read_grid_phases(powermeters: list[ConfiguredPowermeter]) -> list[float]:
-    """Raw three-phase reading from the meter that serves every client (or the
-    first one), waiting briefly for a fresh push so an idle meter cannot pin
-    the caller."""
+async def _passive_grid_phases(powermeters: list[ConfiguredPowermeter]) -> list[float]:
+    """Three-phase reading over the passive route, for callers that only
+    report it (the Marstek responder, cloud reporting).
+
+    Reads the meter that serves every client (or the first one) through
+    :meth:`~astrameter.powermeter.Powermeter.get_passive_watts`, so it reuses
+    the reading the batteries' polls last fetched and reads a polled meter only
+    when none did recently. Waits briefly for a fresh push first, so an idle
+    push meter cannot pin the caller.
+    """
     chosen = next(
         (c.powermeter for c in powermeters if c.client_filter.matches("0.0.0.0")), None
     )
@@ -80,7 +87,7 @@ async def _read_grid_phases(powermeters: list[ConfiguredPowermeter]) -> list[flo
         await asyncio.wait_for(
             chosen.wait_for_next_message(), timeout=FRESH_READING_TIMEOUT_S
         )
-    return [float(v) for v in three_phases(await chosen.get_powermeter_watts_raw())]
+    return [float(v) for v in three_phases(await chosen.get_passive_watts())]
 
 
 async def check_powermeter(powermeter: Powermeter, client_filter: ClientFilter) -> None:
@@ -172,8 +179,16 @@ def _log_ct_settings(ct: CtSettings, device_type: str, device_id: str) -> None:
         extras.append("fair distribution")
     if ct.saturation_detection:
         extras.append("saturation detection")
-    if ct.min_efficient_power > 0:
-        extras.append(f"efficiency optimization ({ct.min_efficient_power}W)")
+    balancer = _balancer_config(ct)
+    if balancer.efficiency_enabled:
+        charge, discharge = balancer.efficient_power(-1), balancer.efficient_power(1)
+        if charge == discharge:
+            extras.append(f"efficiency optimization ({charge:g}W)")
+        else:
+            extras.append(
+                f"efficiency optimization (charge {charge:g}W, "
+                f"discharge {discharge:g}W)"
+            )
     logger.info("Active control enabled: %s", " + ".join(["load split", *extras]))
 
 
@@ -251,7 +266,6 @@ async def _bind_marstek_responder(
     device_id: str,
     powermeters: list[ConfiguredPowermeter],
     marstek_mac: str,
-    marstek_ver_v: int | None,
 ) -> None:
     """Answer Marstek app polls over MQTT, if a managed MAC gives hame-relay
     something to route the replies back to."""
@@ -269,17 +283,16 @@ async def _bind_marstek_responder(
             device_id=device_id,
             ct_type=device.ct_type,
             mac=marstek_mac,
-            get_values=lambda: _read_grid_phases(powermeters),
+            get_values=lambda: _passive_grid_phases(powermeters),
             get_connected_slave_count=device.reporting_consumer_count,
             get_cd4_slave_csv=lambda: format_cd4_slave_csv(
                 device.reporting_consumer_rows()
             ),
             wifi_rssi=device.wifi_rssi,
-            ver_v=(
-                marstek_ver_v
-                if marstek_ver_v is not None
-                else ver_v_from_marstek_api_version(None)
-            ),
+            # A real CT reports its own firmware version as `ver_v`, the same
+            # constant it sends as the handshake's `sv` and over Bluetooth, not
+            # the cloud record's `version` (which our own replies set).
+            ver_v=reporting_firmware_version(device.ct_type),
         )
     )
 
@@ -288,7 +301,11 @@ def _ct_measurement(
     device: CT002, phases: list[float], mqtt_connected: bool
 ) -> CtMeasurement:
     """What a real CT reports to the cloud: the grid phases plus the charge and
-    discharge power aggregated per phase bucket."""
+    discharge power aggregated per phase bucket.
+
+    A real CT fills ``c*`` from the buckets it sends as the UDP response's
+    ``*_dchrg_power`` and ``d*`` from its ``*_chrg_power``.
+    """
     ap, bp, cp = (round(p) for p in phases)
     buckets = device.reporting_phase_buckets()
 
@@ -307,16 +324,16 @@ def _ct_measurement(
         slv=device.reporting_consumer_count(),
         udp=1,
         mqtt=1 if mqtt_connected else 0,
-        cz=charge("x"),
-        ca=charge("A"),
-        cb=charge("B"),
-        cc=charge("C"),
-        cd=charge("ABC"),
-        dz=discharge("x"),
-        da=discharge("A"),
-        db=discharge("B"),
-        dc=discharge("C"),
-        dd=discharge("ABC"),
+        cz=discharge("x"),
+        ca=discharge("A"),
+        cb=discharge("B"),
+        cc=discharge("C"),
+        cd=discharge("ABC"),
+        dz=charge("x"),
+        da=charge("A"),
+        db=charge("B"),
+        dc=charge("C"),
+        dd=charge("ABC"),
     )
 
 
@@ -342,7 +359,7 @@ def _start_cloud_reporting(
 
     async def gather() -> CtMeasurement:
         return _ct_measurement(
-            device, await _read_grid_phases(powermeters), mqtt_connected
+            device, await _passive_grid_phases(powermeters), mqtt_connected
         )
 
     reporter = CloudReporter(
@@ -367,7 +384,6 @@ async def run_device(
     device_id: str = "",
     insights: MqttInsightsService | None = None,
     marstek_mac: str = "",
-    marstek_ver_v: int | None = None,
     registry: StatusRegistry | None = None,
 ) -> None:
     """Run one emulated device until it stops, wiring it to the optional
@@ -404,7 +420,7 @@ async def run_device(
             insights.register_device(device_id, device)
             if insights.marstek_mqtt_enabled:
                 await _bind_marstek_responder(
-                    insights, device, device_id, powermeters, marstek_mac, marstek_ver_v
+                    insights, device, device_id, powermeters, marstek_mac
                 )
         if ct.cloud_reporting:
             # The cloud knows the CT by the MAC registered in the Marstek
@@ -493,7 +509,6 @@ async def async_main(
                     device_id,
                     insights,
                     managed_marstek.get(device_type, ("", None))[0],
-                    managed_marstek.get(device_type, ("", None))[1],
                     registry=registry,
                 )
                 for device_type, device_id in zip(

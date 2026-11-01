@@ -35,9 +35,30 @@ configuration:
   min_efficient_power:
     name: Min Efficient Power
     description: "Minimum watts each active battery should handle. At low demand, excess batteries are idled so the remaining ones stay above this threshold and operate more efficiently. Set to 0 to disable (default). Example: 2 batteries, 200 W demand, threshold 150 — one battery gets 200 W, the other idles. Only applies to CT002/CT003 device types."
+  min_efficient_charge_power:
+    name: Min Efficient Charge Power
+    description: "Min Efficient Power for charging only, per battery: with two batteries, 1200 keeps charging on one until the surplus reaches about 2880 W while discharging uses a lower value. Leave empty to use Min Efficient Power; 0 turns efficiency rotation off while charging. Unlike Min Charge Power, it never idles every battery: it decides how many share the surplus. Only applies to CT002/CT003 device types."
+  min_efficient_discharge_power:
+    name: Min Efficient Discharge Power
+    description: "Min Efficient Power for discharging only, e.g. 375 to spread demand across batteries earlier than while charging. Leave empty to use Min Efficient Power; 0 turns efficiency rotation off while discharging. Unlike Min Discharge Power, it never idles every battery: it decides how many share the demand. Only applies to CT002/CT003 device types."
   efficiency_rotation_interval:
     name: Efficiency Rotation Interval
     description: "Seconds between rotating which battery has priority when Min Efficient Power is active (default 900). Ensures fair wear across batteries by periodically swapping which batteries are active and which are idled. Minimum value is 1. Only applies to CT002/CT003 device types."
+  min_charge_power:
+    name: Min Charge Power
+    description: "Lowest power (in watts) a battery charges at. When its share of the solar surplus is smaller, it stays idle and the surplus goes to the other batteries or to the grid, because a battery charges least efficiently at a few watts. Each battery can override this from Home Assistant. 0 = no minimum (default). Only applies to CT002/CT003 device types."
+  min_discharge_power:
+    name: Min Discharge Power
+    description: "Lowest power (in watts) a battery discharges at. When its share of the household demand is smaller, it stays idle and the other batteries or the grid cover it, because a battery discharges least efficiently at a few watts. It resumes once its share is 20% above the minimum. Each battery can override this from Home Assistant. 0 = no minimum (default). Only applies to CT002/CT003 device types."
+  min_power_hysteresis:
+    name: Min Power Hysteresis
+    description: "How many watts above its minimum charge or discharge power a battery's share must reach before an idle battery starts again, so a demand hovering at the minimum doesn't switch it on and off. Example: Min Discharge Power 30 and 20 here start the battery at 50 W and stop it at 30 W. Leave empty to start at 20% above the minimum (default). Only applies to CT002/CT003 device types."
+  max_charge_power:
+    name: Max Charge Power
+    description: "Most power (in watts) a battery charges at; the other batteries, or the grid, take what is left of the surplus. 0 keeps it from charging. Each battery can override this from Home Assistant. Leave empty for no limit (default). Only applies to CT002/CT003 device types."
+  max_discharge_power:
+    name: Max Discharge Power
+    description: "Most power (in watts) a battery discharges at; the other batteries, or the grid, cover the rest of the demand. 0 keeps it from discharging. Each battery can override this from Home Assistant. Leave empty for no limit (default). Only applies to CT002/CT003 device types."
   min_dc_output:
     name: Min DC Output
     description: "Minimum discharge (in watts) to keep a DC battery's inverter (e.g. Marstek B2500) from switching off at 0 W and falling asleep under high PV surplus. Applies per battery and only affects DC-only batteries without their own inverter (Venus and Jupiter are unaffected). Set to 0 to disable (default); recommended >= 20. Only applies to CT002/CT003 device types."
@@ -124,7 +145,7 @@ configuration:
     description: "Host to report to. Leave empty for the default eu.hamedata.com (other regions swap the host)."
   cloud_reporting_interval:
     name: Cloud Reporting Interval
-    description: "Seconds between reports (default 60). Tune to match a real device's cadence."
+    description: "Seconds to wait after an accepted report before the next one (default 300, what a real CT waits)."
   power_offset:
     name: Power Offset
     description: "Optional. Added to each power value after the multiplier is applied. Single value (e.g. -50) or a comma-separated list (one per phase, e.g. -50,-30,-40). Leave empty to disable."
@@ -154,16 +175,16 @@ configuration:
     description: "Optional. Smallest spike (in watts) that may be rejected, so tiny fluctuations on a steady signal are never filtered. Try 50. Leave empty or 0 for no floor. Only used when Hampel Window is set."
   pid_kp:
     name: PID Proportional Gain (Kp)
-    description: "Optional. Enables a PID controller that steers grid power toward zero. Start at 0.5 (stable between 0 and 1). Leave empty or 0 to disable PID."
+    description: "Optional. Makes the battery react less strongly to each reading, which can calm a battery that swings back and forth. Use a value between 0 and 1; start at 0.5. Leave empty or 0 to disable. Not needed with CT002/CT003 active control."
   pid_ki:
     name: PID Integral Gain (Ki)
-    description: "Optional. Integral gain for the PID controller. Usually leave empty (0) to avoid wind-up. Only used when PID Proportional Gain is set."
+    description: "Optional. Leave empty (0): any value above 0 gradually pushes the grid away from zero. Only used when PID Proportional Gain is set."
   pid_kd:
     name: PID Derivative Gain (Kd)
-    description: "Optional. Derivative gain for the PID controller. Usually leave empty (0) - it tends to be noisy on real meters. Only used when PID Proportional Gain is set."
+    description: "Optional. Leave empty (0): it tends to make swinging worse. Only used when PID Proportional Gain is set."
   pid_output_max:
     name: PID Output Limit (W)
     description: "Optional. Caps the PID adjustment to plus/minus this many watts. Default 800. Only used when PID Proportional Gain is set."
   pid_mode:
     name: PID Mode
-    description: "Optional. 'bias' adds the PID adjustment to the meter reading (recommended); 'replace' uses the PID output instead of the reading. Default bias. Only used when PID Proportional Gain is set."
+    description: "Optional. Leave at 'bias' (the default). 'replace' sends the battery only the PID adjustment, which makes it react the wrong way. Only used when PID Proportional Gain is set."

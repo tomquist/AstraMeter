@@ -14,6 +14,7 @@ from astrameter.cloud_reporting import (
     CloudReporter,
     CloudReporterConfig,
     CtMeasurement,
+    HttpResponse,
 )
 from astrameter.config.config_loader import new_config_parser
 from astrameter.config.ini_config import IniAppConfig
@@ -487,8 +488,8 @@ _REPORTED_AT = datetime(2026, 6, 18, 12, 0, 0)
 async def _reporter_that_has_pushed() -> CloudReporter:
     """A cloud reporter past its first push, so ``last_report_at`` is set."""
 
-    async def http_get(url: str) -> int | None:
-        return 200
+    async def http_get(url: str) -> HttpResponse | None:
+        return HttpResponse(200, "")
 
     async def gather() -> CtMeasurement:
         return CtMeasurement(ap=10, bp=20, cp=30, dp=60)

@@ -299,10 +299,12 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
 
     // Efficiency window weight number — how much of the efficiency rotation
     // window this battery participates in, as a percentage. 100 % neutral (full
-    // participation); 0 % skips the battery for efficiency (parked while
-    // limiting). Surfaced as a percentage; the internal value is a 0-1 fraction.
-    // Only meaningful when efficiency rotation is enabled (min_efficient_power >
-    // 0); without it every battery stays active, so don't surface the entity
+    // participation); 0 % makes it a backup that never leads but covers what
+    // the batteries ahead cannot (the standby reserve). Surfaced as a
+    // percentage; the internal value is a 0-1 fraction.
+    // Only meaningful when efficiency rotation is enabled in either direction
+    // (min_efficient_power, or its charge / discharge override, above 0);
+    // without it every battery stays active, so don't surface the entity
     // (mirrors discovery.py).
     if (efficiency_rotation) {
       JsonObject eww = components["efficiency_window_weight"].to<JsonObject>();
@@ -341,6 +343,38 @@ std::pair<std::string, std::string> build_ct002_consumer_discovery(
       mdo["command_topic"] = state_topic + "/min_dc_output/set";
       mdo["retain"] = true;
       mdo["entity_category"] = "config";
+    }
+
+    // Min / Max Charge and Discharge Power numbers — below the minimum a battery
+    // idles at 0 W rather than run at a few watts, where its inverter is least
+    // efficient; the maximum caps what it is asked for (the top of the range is
+    // no limit).
+    struct PowerLimit {
+      const char *key;
+      const char *name;
+      const char *fallback;
+    };
+    for (const auto &limit : {PowerLimit{"min_charge_power", "Min Charge Power", "0"},
+                              PowerLimit{"min_discharge_power", "Min Discharge Power", "0"},
+                              PowerLimit{"max_charge_power", "Max Charge Power", "11040"},
+                              PowerLimit{"max_discharge_power", "Max Discharge Power", "11040"}}) {
+      const std::string key = limit.key;
+      JsonObject mp = components[key].to<JsonObject>();
+      mp["platform"] = "number";
+      mp["unique_id"] = uid_prefix + "_" + key;
+      mp["name"] = limit.name;
+      mp["unit_of_measurement"] = "W";
+      mp["device_class"] = "power";
+      mp["min"] = 0;
+      mp["max"] = static_cast<int>(controls::BATTERY_POWER_MAX);
+      mp["step"] = 1;
+      mp["mode"] = "box";
+      mp["state_topic"] = state_topic;
+      mp["value_template"] =
+          "{{ value_json." + key + " | default(" + std::string(limit.fallback) + ") }}";
+      mp["command_topic"] = state_topic + "/" + key + "/set";
+      mp["retain"] = true;
+      mp["entity_category"] = "config";
     }
 
     // Device info
@@ -514,9 +548,9 @@ std::pair<std::string, std::string> build_ct002_device_discovery(
     cqx["entity_category"] = "diagnostic";
 
     // The Force Rotation button only does anything when efficiency rotation is
-    // enabled (min_efficient_power > 0); without it every battery stays active
-    // and there's nothing to rotate, so don't surface the button (mirrors
-    // discovery.py).
+    // enabled in either direction (BalancerConfig::efficiency_enabled); without
+    // it every battery stays active and there's nothing to rotate, so don't
+    // surface the button (mirrors discovery.py).
     if (efficiency_rotation) {
       JsonObject fr = components["force_rotation"].to<JsonObject>();
       fr["platform"] = "button";

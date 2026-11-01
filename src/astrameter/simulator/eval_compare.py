@@ -165,7 +165,8 @@ _METRIC_GLOSSARY = [
         f"Money north-star: electricity bill (eurocents, import @ "
         f"{RETAIL_CT_PER_KWH:g} ct/kWh, export @ {FEEDIN_CT_PER_KWH:g} ct/kWh) "
         f"over what a perfect-foresight optimal battery would have paid on the "
-        f"same load. Ungameable (both grid directions cost); 0 = matched the "
+        f"same load, with energy still stored at the end credited at the feed-in "
+        f"tariff. Ungameable (both grid directions cost); 0 = matched the "
         f"optimum. The single number that says how much the controller left on "
         f"the table.",
     ),

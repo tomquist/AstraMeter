@@ -26,6 +26,7 @@ that apply to the whole app and to every powermeter. For one specific area, see:
 - [General Configuration](#general-configuration)
   - [Per-powermeter options](#per-powermeter-options)
 - [Value Transformation](#value-transformation)
+  - [Keeping a small import margin](#keeping-a-small-import-margin)
 - [PID Controller](#pid-controller)
 - [Multiple Powermeters](#multiple-powermeters)
 
@@ -145,50 +146,68 @@ POWER_MULTIPLIER = 1,0,1
 **Note:** Transforms are applied when readings are taken from the powermeter,
 before the values reach the emulated device (Shelly, CT002/CT003, etc.).
 
+### Keeping a small import margin
+
+Your battery (or, with CT002/CT003 active control, AstraMeter) steers the grid
+toward 0 W, based on the meter reading. It never lands exactly on 0 W: it drifts
+a few watts either way, and some of that time power goes out to the grid. If you
+would rather buy a few watts than give them away, set a negative
+`POWER_OFFSET`. That lowers the meter reading before anything steers on it, so
+steering it to 0 W leaves the real grid that many watts on the import side.
+With `POWER_OFFSET = -20`, the battery aims for about 20 W drawn from the grid
+instead of 0 W.
+
+- It works with every emulated device (Shelly, CT002/CT003), whether or not
+  active control is on.
+- The margin is bought from the grid around the clock: 20 W is about 0.5 kWh a
+  day.
+- It reduces the small exports while the load is steady. It does not prevent
+  the brief export right after a large load switches off, while the battery is
+  still turning down. Nor does it prevent export when the battery is full or
+  already charging as fast as it can.
+- On a three-phase meter a single value is added to each phase, so the total
+  moves by three times that value.
+
+On ESPHome, put an `offset:` filter on the grid sensor instead (see
+[ESPHome powermeter sources](esphome-powermeters.md)).
+
 ## PID Controller
 
-You can layer a PID (Proportional-Integral-Derivative) controller on top of any
-powermeter. The controller takes the grid power reading as its process variable
-and steers the reported value toward zero (net-zero grid exchange). That adds a
-second, software-level closed loop, which can speed up convergence or make up
-for a storage device that responds slowly.
+Despite its name, this setting does not steer the grid to zero by itself. Your
+battery does that (or AstraMeter does, with CT002/CT003 active control). What
+the PID changes is **how strongly the battery reacts** to each reading.
 
-**How it works:**
+With only `PID_KP` set, the battery receives the reading scaled down to
+`(1 − PID_KP)` of its real value. With `PID_KP = 0.5`, 400 W of grid import
+reaches the battery as 200 W, so it corrects half as much at each step. The PID
+never changes the reading by more than `PID_OUTPUT_MAX` (800 W by default). With
+`PID_KP = 0.5` that limit is reached at 1,600 W; a larger reading reaches the
+battery 800 W lower than it really is.
 
-- `PID_MODE = bias` (default) — adds the PID output to the raw meter reading. The
-  storage device's own closed-loop controller still acts, so the effective gain
-  is `(1 − Kp) × Kb` where `Kb` is the device's internal gain. Use
-  `0 < Kp < 1`; `Kp = 0.5` is the recommended starting point.
-- `PID_MODE = replace` — reports only the PID output, bypassing the device's own
-  loop entirely.
+**When it helps:** your battery overshoots and swings back and forth, because
+it reacts too strongly to each reading. This mostly happens with a slow or
+delayed meter, when the battery reacts to the readings itself: with Shelly
+emulation, or with CT002/CT003 and `ACTIVE_CONTROL = false`. Turning its
+reaction down often lets it settle. Try the
+[other fixes for swinging](faq.md#my-output-power-oscillates-or-yo-yos-between-zero-and-full)
+first.
 
-**Anti-windup** is built in: the integral term is clamped so that the total PID
-output never exceeds `±PID_OUTPUT_MAX`, and accumulation pauses while the output
-is saturated.
+**When it does not help:** if your battery already settles, the PID only makes
+it slower to follow load changes. With CT002/CT003 and `ACTIVE_CONTROL` on (the
+default), AstraMeter already paces the batteries itself, so leave the PID off.
 
-Set all parameters globally in `[GENERAL]`, or per powermeter section — a
+Set the parameters globally in `[GENERAL]`, or per powermeter section — a
 section value overrides the global one:
 
-| Parameter | Description | Default |
+| Parameter | What to set | Default |
 |-----------|-------------|---------|
-| `PID_KP` | Proportional gain. Set > 0 to enable the PID. | `0` (disabled) |
-| `PID_KI` | Integral gain. Usually not needed; risks windup. | `0` |
-| `PID_KD` | Derivative gain. Noisy on real meters; leave at 0. | `0` |
-| `PID_OUTPUT_MAX` | Maximum absolute PID output in watts. | `800` |
-| `PID_MODE` | `bias` or `replace`. | `bias` |
+| `PID_KP` | `0` turns the PID off. Use a value between 0 and 1; start with `0.5`. Higher values calm the battery more but make it slower. At `1` the battery stops reacting (except to the part of a reading beyond `PID_OUTPUT_MAX`), and above `1` it reacts in the opposite direction. | `0` (off) |
+| `PID_KI` | Leave at `0`. Any value above 0 gradually pushes the grid away from zero, until it sits at about `PID_OUTPUT_MAX` of import or export. | `0` |
+| `PID_KD` | Leave at `0`. It answers every sudden change in the reading with a spike, which tends to make swinging worse. | `0` |
+| `PID_OUTPUT_MAX` | The most the PID may change the reading by, in watts. | `800` |
+| `PID_MODE` | Leave at `bias`. `replace` sends the battery only the PID's correction instead of the reading; the battery then reacts in the opposite direction until it reaches its power limit. | `bias` |
 
-For a small import safety buffer that prevents accidental export, combine the
-PID with a negative `POWER_OFFSET` (applied before the PID):
-
-```ini
-[SHELLY]
-TYPE = 1PM
-IP = 192.168.1.100
-POWER_OFFSET = -20     # 20 W safety buffer toward import
-PID_KP = 0.5
-PID_OUTPUT_MAX = 800
-PID_MODE = bias
-```
+`PID_KI` and `PID_KD` are ignored unless `PID_KP` is above 0.
 
 ## Multiple Powermeters
 

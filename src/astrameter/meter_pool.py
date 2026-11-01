@@ -12,7 +12,7 @@ from __future__ import annotations
 from astrameter.config.logger import logger
 from astrameter.config.settings import ConfiguredPowermeter
 from astrameter.powermeter import Powermeter
-from astrameter.powermeter.wrappers.health import HealthTrackingPowermeter
+from astrameter.powermeter.wrappers.base import PowermeterWrapper
 
 #: How long a poll waits for a pushed reading before serving the last one.
 #: Batteries poll about once a second, so a longer wait would answer after the
@@ -21,13 +21,10 @@ FRESH_MESSAGE_TIMEOUT_S = 2.0
 
 
 def powermeter_name(powermeter: Powermeter) -> str:
-    """The meter class behind the health wrapper every configured meter gets."""
-    inner = (
-        powermeter.wrapped_powermeter
-        if isinstance(powermeter, HealthTrackingPowermeter)
-        else powermeter
-    )
-    return type(inner).__name__
+    """The source class under the wrappers every configured meter gets."""
+    while isinstance(powermeter, PowermeterWrapper):
+        powermeter = powermeter.wrapped_powermeter
+    return type(powermeter).__name__
 
 
 def powermeter_for(

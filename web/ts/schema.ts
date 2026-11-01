@@ -229,7 +229,7 @@ export const PER_METER_TUNING: Field[] = [
   {
     key: "PID_KP",
     label: "PID proportional gain (Kp)",
-    help: "0 = PID off. Set >0 to layer a net-zero controller on top of the meter. 0.5 is a safe start (single battery).",
+    help: "0 = off. Makes the battery react less strongly to each reading (use 0–1; start at 0.5). Not needed with CT002/CT003 active control.",
     type: "number",
     default: "",
     placeholder: "0",
@@ -237,7 +237,7 @@ export const PER_METER_TUNING: Field[] = [
   {
     key: "PID_KI",
     label: "PID integral gain (Ki)",
-    help: "Usually leave at 0 — it risks integral wind-up.",
+    help: "Leave at 0 — above 0 it gradually pushes the grid away from zero.",
     type: "number",
     default: "",
     placeholder: "0",
@@ -246,7 +246,7 @@ export const PER_METER_TUNING: Field[] = [
   {
     key: "PID_KD",
     label: "PID derivative gain (Kd)",
-    help: "Leave at 0 — noisy on real meters.",
+    help: "Leave at 0 — it tends to make swinging worse.",
     type: "number",
     default: "",
     placeholder: "0",
@@ -264,7 +264,7 @@ export const PER_METER_TUNING: Field[] = [
   {
     key: "PID_MODE",
     label: "PID mode",
-    help: "bias adds the PID output to the reading (recommended). replace uses only the PID output.",
+    help: "Leave at bias. replace sends only the PID output, which makes the battery react the wrong way.",
     type: "select",
     default: "",
     options: [
@@ -966,8 +966,21 @@ export const CT_DC_KEEPALIVE: Field[] = [
   { key: "MIN_DC_OUTPUT", ey: "min_dc_output", label: "Min DC output (W)", help: "Minimum discharge to keep a DC battery's inverter (e.g. Marstek B2500) from switching off at 0 W and sleeping under high PV surplus. Applied per DC-only battery; AC batteries (Venus) and Jupiter are unaffected. 0 = off; recommended >= 20.", type: "number", placeholder: "0" },
 ];
 
+// Applies to each battery individually (also with a single battery); a battery
+// can override each from Home Assistant or the dashboard. The ESPHome keys live
+// under the `balancer:` block.
+export const CT_POWER_LIMITS: Field[] = [
+  { key: "MIN_DISCHARGE_POWER", ey: "min_discharge_power", label: "Min discharge power (W)", help: "A battery is least efficient at a few watts. When its share of the household demand is smaller than this, it stays idle and the other batteries or the grid cover it; it resumes once its share is 20% above. Example: 50 lets a 20 W night standby come from the grid. 0 = off.", type: "number", placeholder: "0" },
+  { key: "MIN_CHARGE_POWER", ey: "min_charge_power", label: "Min charge power (W)", help: "When a battery's share of the solar surplus is smaller than this, it stays idle and the surplus goes to the other batteries or to the grid. Storing even a small surplus usually beats exporting it, so leave this at 0 unless you know you want it. 0 = off.", type: "number", placeholder: "0" },
+  { key: "MIN_POWER_HYSTERESIS", ey: "min_power_hysteresis", label: "Min power hysteresis (W)", help: "How many watts above its minimum an idle battery's share must reach before it starts again, so a load hovering at the minimum doesn't switch it on and off. Min discharge 30 with 20 here: starts at 50 W, stops at 30 W. Empty = 20% above the minimum.", type: "number", placeholder: "(20% of the minimum)" },
+  { key: "MAX_DISCHARGE_POWER", ey: "max_discharge_power", label: "Max discharge power (W)", help: "The most a battery discharges at; the other batteries or the grid cover the rest. 0 keeps it from discharging. Leave empty for no limit.", type: "number", placeholder: "(no limit)" },
+  { key: "MAX_CHARGE_POWER", ey: "max_charge_power", label: "Max charge power (W)", help: "The most a battery charges at; the other batteries take the rest of the surplus, or it is exported. 0 keeps it from charging, e.g. to hold its charge level for later. Leave empty for no limit.", type: "number", placeholder: "(no limit)" },
+];
+
 export const CT_EFFICIENCY: Field[] = [
   { key: "MIN_EFFICIENT_POWER", ey: "min_efficient_power", label: "Min efficient power (W)", help: "Concentrate small loads on fewer batteries so each stays efficient. 0 = off. Not recommended for DC batteries.", type: "number", placeholder: "0" },
+  { key: "MIN_EFFICIENT_CHARGE_POWER", ey: "min_efficient_charge_power", label: "Min efficient charge power (W)", help: "Min efficient power for charging only, per battery: with two batteries, 1200 keeps charging on one until the surplus reaches about 2880 W while discharging spreads earlier. Empty = min efficient power; 0 = off while charging. Unlike min charge power it never idles every battery.", type: "number", placeholder: "(min efficient power)" },
+  { key: "MIN_EFFICIENT_DISCHARGE_POWER", ey: "min_efficient_discharge_power", label: "Min efficient discharge power (W)", help: "Min efficient power for discharging only. Empty = min efficient power; 0 = off while discharging. Unlike min discharge power it never idles every battery: it decides how many share the demand.", type: "number", placeholder: "(min efficient power)" },
   { key: "EFFICIENCY_ROTATION_INTERVAL", ey: "efficiency_rotation_interval", label: "Rotation interval (seconds)", help: "How often priority rotates between batteries. Default 900 (min 10).", type: "number", placeholder: "900" },
   { key: "PROBE_MIN_POWER", ey: "probe_min_power", label: "Probe min power (W)", help: "Floor sent when probing a newly promoted battery. Default 80.", type: "number", placeholder: "80" },
   { key: "EFFICIENCY_FADE_ALPHA", ey: "efficiency_fade_alpha", label: "Fade alpha", help: "How fast the old battery fades after a successful probe. Default 0.15.", type: "number", placeholder: "0.15" },
@@ -988,9 +1001,9 @@ export const CT_SATURATION: Field[] = [
 // add-on options, and the ESPHome `cloud_reporting:` sub-block (which also pulls
 // in an http_request: block). Generator handles the mapping by key, so no `ey`.
 export const CT_CLOUD: Field[] = [
-  { key: "CLOUD_REPORTING", label: "Cloud reporting", help: "Off (default): the emulated CT keeps to itself. On: it periodically reports to Marstek's cloud (hamedata.com) over plain HTTP, like a real CT — live grid power, the per-phase charge/discharge split, signal, battery count and link state. The cloud only stores reports for a device id it already knows from pairing; the reported id is the CT's MAC (the device registered via your Marstek account, if configured).", type: "select", default: "", options: [{ value: "", label: "Default (off)" }, { value: "True", label: "On" }, { value: "False", label: "Off" }] },
+  { key: "CLOUD_REPORTING", label: "Cloud reporting", help: "Off (default): the emulated CT keeps to itself. On: it periodically reports to Marstek's cloud (hamedata.com) over plain HTTP, like a real CT — live grid power, the per-phase charge/discharge split, signal, battery count and link state. The cloud only stores reports for a device id it already knows from pairing; the reported id is the CT's MAC (the device registered via your Marstek account, if configured; on an ESP32 added over Bluetooth, the CT the app added).", type: "select", default: "", options: [{ value: "", label: "Default (off)" }, { value: "True", label: "On" }, { value: "False", label: "Off" }] },
   { key: "CLOUD_REPORTING_HOST", label: "Reporting host", help: "Host to report to. Blank uses the default eu.hamedata.com (other regions swap the host).", type: "text", placeholder: "eu.hamedata.com" },
-  { key: "CLOUD_REPORTING_INTERVAL", label: "Reporting interval (seconds)", help: "Seconds between reports. Default 60; tune to match a real device's cadence.", type: "number", placeholder: "60" },
+  { key: "CLOUD_REPORTING_INTERVAL", label: "Reporting interval (seconds)", help: "Seconds to wait after an accepted report before the next one. Default 300, what a real CT waits.", type: "number", placeholder: "300" },
 ];
 
 export const MARSTEK_FIELDS: Field[] = [

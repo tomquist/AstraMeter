@@ -68,7 +68,9 @@ HOST_GTESTS = [
     "host_cloud_reporting_test",
     "host_status_json_test",
     "host_controls_test",
+    "host_ble_protocol_test",
     "host_write_slot_test",
+    "host_cloud_http_slot_test",
 ]
 
 

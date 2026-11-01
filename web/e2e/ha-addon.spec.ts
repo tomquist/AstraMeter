@@ -143,7 +143,10 @@ test("the form opens on the essentials and documents every field", async ({
   // be a label and nothing else.
   const trust = page.locator("label.field", { hasText: "Grid prediction trust" });
   await expect(trust.locator(".help")).toContainText("trust");
-  const active = page.locator("label.field", { hasText: "Active control" });
+  // Match the toggle by its name: other fields' help text mentions active control.
+  const active = page.locator("label.field.toggle", {
+    has: page.locator('.row > span:text-is("Active control")'),
+  });
   await expect(active.locator("input[type=checkbox]")).toBeVisible();
   await expect(active.locator(".help")).not.toBeEmpty();
 

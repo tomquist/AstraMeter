@@ -171,6 +171,22 @@ def test_validate_power_unit_rejects_energy_unit() -> None:
         ct002_component._validate_power_unit("power_sensor_l2", "meter_total", "kWh")
 
 
+def test_validate_grid_unit_accepts_its_unit_and_undeclared() -> None:
+    ct002_component._validate_grid_unit("voltage_sensor_l1", "grid_v", "V", "V")
+    ct002_component._validate_grid_unit("voltage_sensor_l1", "grid_v", None, "V")
+    ct002_component._validate_grid_unit("frequency_sensor", "grid_hz", "Hz", "Hz")
+
+
+def test_validate_grid_unit_rejects_another_unit() -> None:
+    import esphome.config_validation as cv
+
+    with pytest.raises(cv.Invalid) as exc_info:
+        ct002_component._validate_grid_unit("voltage_sensor_l2", "grid_v", "mV", "V")
+    assert "reads it in V" in str(exc_info.value)
+    with pytest.raises(cv.Invalid):
+        ct002_component._validate_grid_unit("frequency_sensor", "grid_hz", "kHz", "Hz")
+
+
 def test_mqtt_insights_device_id_defaults_to_python_default() -> None:
     # A blank device_id must fall back to the same default the Python add-on
     # uses, so both stacks publish HA discovery under astrameter_ct002_device-1
@@ -896,3 +912,165 @@ def test_concurrent_writes_do_not_delete_each_others_temporary_file(
     assert not errors, errors
     assert target.read_text(encoding="utf-8") == content
     assert [p.name for p in target.parent.iterdir()] == [target.name]
+
+
+# ── bluetooth: (opt-out, ESP32 variants with a radio) ───────────────────
+
+
+@contextlib.contextmanager
+def _esp32_variant(variant: str) -> Iterator[None]:
+    """Record *variant* the way the esp32 platform does, then restore."""
+    from esphome.components.esp32 import const as esp32_const
+    from esphome.core import CORE
+
+    data = CORE.data.setdefault(esp32_const.KEY_ESP32, {})
+    missing = object()
+    previous = data.get(esp32_const.KEY_VARIANT, missing)
+    data[esp32_const.KEY_VARIANT] = variant
+    try:
+        yield
+    finally:
+        if previous is missing:
+            data.pop(esp32_const.KEY_VARIANT, None)
+        else:
+            data[esp32_const.KEY_VARIANT] = previous
+
+
+def test_bluetooth_absent_means_on(esp32_core: Any) -> None:
+    with _esp32_variant("ESP32"):
+        config = {"power_sensor_l1": "grid_l1"}
+        assert ct002_component._resolve_bluetooth(config) == {
+            "power_sensor_l1": "grid_l1",
+            "bluetooth": {},
+        }
+
+
+def test_bluetooth_absent_stays_absent_without_a_radio(esp32_core: Any) -> None:
+    # The ESP32-S2 has no Bluetooth; defaulting it on would fail esp32_ble's
+    # own variant check for a block the user never wrote.
+    with _esp32_variant("ESP32S2"):
+        config = {"power_sensor_l1": "grid_l1"}
+        assert ct002_component._resolve_bluetooth(config) == {
+            "power_sensor_l1": "grid_l1"
+        }
+
+
+def test_bluetooth_absent_stays_absent_on_the_p4(esp32_core: Any) -> None:
+    # The P4 has no radio of its own; Bluetooth there needs a companion chip
+    # the config sets up on purpose, so an upgrade must not switch it on.
+    with _esp32_variant("ESP32P4"):
+        config = {"power_sensor_l1": "grid_l1"}
+        assert ct002_component._resolve_bluetooth(config) == {
+            "power_sensor_l1": "grid_l1"
+        }
+
+
+def test_bluetooth_absent_stays_absent_off_esp32(host_core: Any) -> None:
+    config = {"power_sensor_l1": "grid_l1"}
+    assert ct002_component._resolve_bluetooth(config) == {"power_sensor_l1": "grid_l1"}
+
+
+def test_bluetooth_false_drops_the_key_for_every_spelling(esp32_core: Any) -> None:
+    with _esp32_variant("ESP32"):
+        for spelling in (False, "false", "no", "off"):
+            config = {"power_sensor_l1": "grid_l1", "bluetooth": spelling}
+            assert ct002_component._resolve_bluetooth(config) == {
+                "power_sensor_l1": "grid_l1"
+            }, spelling
+
+
+def test_bluetooth_shorthand_accepts_bare_key_and_true() -> None:
+    assert ct002_component._bluetooth_shorthand(None) == {}
+    assert ct002_component._bluetooth_shorthand(True) == {}
+    assert ct002_component._bluetooth_shorthand("true") == {}
+
+
+def test_auto_load_pulls_the_ble_stack_only_for_a_resolved_bluetooth() -> None:
+    loads = ct002_component.AUTO_LOAD({"bluetooth": {}})
+    assert "esp32_ble" in loads and "esp32_ble_server" in loads
+    loads = ct002_component.AUTO_LOAD({})
+    assert "esp32_ble" not in loads and "esp32_ble_server" not in loads
+
+
+def test_bluetooth_keeps_the_yaml_wifi_unless_allowed(esp32_core: Any) -> None:
+    # The bare key and the block form both validate. Off unless asked for, so
+    # a phone in Bluetooth range can't move the board to another network.
+    for raw, expected in (
+        (None, False),
+        ({}, False),
+        ({"allow_wifi_change": True}, True),
+    ):
+        config = ct002_component.BLUETOOTH_SCHEMA(raw)
+        assert config[ct002_component.CONF_ALLOW_WIFI_CHANGE] is expected, raw
+
+
+def test_bluetooth_keeps_phase_directions_unless_allowed(esp32_core: Any) -> None:
+    # Reversing a phase changes what the batteries do and needs no pairing,
+    # so the app may only do it once the YAML says so.
+    for raw, expected in (
+        (None, False),
+        ({}, False),
+        ({"allow_direction_change": True}, True),
+    ):
+        config = ct002_component.BLUETOOTH_SCHEMA(raw)
+        assert config[ct002_component.CONF_ALLOW_DIRECTION_CHANGE] is expected, raw
+
+
+def _generated_defines(tmp_path: Path, ct002_extra: str) -> str:
+    """Generate (not compile) a minimal ESP32 config, return its defines.h."""
+    if shutil.which("esphome") is None:
+        pytest.skip("ESPHome CLI not installed; cannot generate the firmware")
+    config = tmp_path / "device.yaml"
+    config.write_text(
+        f"""
+esphome:
+  name: ct002-defines
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+wifi:
+  ssid: "test-ssid"
+  password: "test-password"
+external_components:
+  - source:
+      type: local
+      path: {COMPONENTS_PATH}
+    components: [ct002]
+mqtt:
+  broker: 192.168.1.10
+  discovery: false
+sensor:
+  - platform: template
+    id: grid_l1
+    lambda: 'return 0.0f;'
+ct002:
+  power_sensor_l1: grid_l1
+  dashboard: false
+  bluetooth: false
+{ct002_extra}
+""",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["esphome", "compile", "--only-generate", str(config)],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    return (
+        tmp_path / ".esphome/build/ct002-defines/src/esphome/core/defines.h"
+    ).read_text(encoding="utf-8")
+
+
+def test_mqtt_insights_queues_its_publishes(tmp_path: Path) -> None:
+    # A synchronous publish into a connection the broker has reset blocks the
+    # ct002 loop for esp-mqtt's 10 s network timeout, long enough for the task
+    # watchdog to reset the board. The queue is what `idf_send_async` turns on.
+    assert "USE_MQTT_IDF_ENQUEUE" in _generated_defines(tmp_path, "  mqtt_insights: {}")
+
+
+def test_ct002_without_mqtt_insights_leaves_mqtt_sending_alone(
+    tmp_path: Path,
+) -> None:
+    assert "USE_MQTT_IDF_ENQUEUE" not in _generated_defines(tmp_path, "")

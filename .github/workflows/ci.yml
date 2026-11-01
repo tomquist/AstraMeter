@@ -337,6 +337,18 @@ jobs:
       - name: Install mosquitto (for MQTT integration tests)
         run: sudo apt-get update -qq && sudo apt-get install -y -qq mosquitto
 
+      # Ubuntu 26.04 confines /usr/sbin/mosquitto with an AppArmor profile that
+      # only reads config under /etc/mosquitto, so the brokers the MQTT tests
+      # start exit before opening their port. The profile's local include lets
+      # them read the config the fixture in src/astrameter/conftest.py writes;
+      # the path matches its temp-dir prefix.
+      - name: Let mosquitto read the test brokers' config
+        run: |
+          if [ -f /etc/apparmor.d/mosquitto ]; then
+            echo '/tmp/astrameter-mosquitto-*/mosquitto.conf r,' | sudo tee /etc/apparmor.d/local/mosquitto
+            sudo apparmor_parser -r /etc/apparmor.d/mosquitto
+          fi
+
       - name: Install dependencies
         run: uv sync --frozen --extra dev
 

@@ -152,7 +152,7 @@ class CtSettings:
     # Opt-in HTTP cloud reporting (hamedata.com).
     cloud_reporting: bool = False
     cloud_reporting_host: str = "eu.hamedata.com"
-    cloud_reporting_interval: float = 60.0
+    cloud_reporting_interval: float = 300.0
     # Active control / balancing.
     active_control: bool = True
     peakshaving_threshold: float = 0.0
@@ -182,12 +182,27 @@ class CtSettings:
     saturation_decay_factor: float = 0.995
     # Efficiency optimization.
     min_efficient_power: int = 0
+    # The same threshold for charging / discharging only (issue #642).
+    # ``None`` = MIN_EFFICIENT_POWER; 0 = no efficiency rotation that way.
+    min_efficient_charge_power: float | None = None
+    min_efficient_discharge_power: float | None = None
     probe_min_power: int = 80
     efficiency_rotation_interval: int = 900
     efficiency_fade_alpha: float = 0.15
     efficiency_saturation_threshold: float = 0.4
     efficiency_demand_alpha: float = 0.1
     min_dc_output: float = 0.0
+    # Below these a battery idles at 0 W instead of charging / discharging at a
+    # few watts; a battery's own setting overrides them. 0 = no minimum.
+    min_charge_power: float = 0.0
+    min_discharge_power: float = 0.0
+    # How far above its minimum an idle battery must be asked for before it
+    # starts again (W); ``None`` = 1.2x the minimum.
+    min_power_hysteresis: float | None = None
+    # The most a battery is asked to charge / discharge; a battery's own
+    # setting overrides them. ``None`` = no limit, 0 = not in that direction.
+    max_charge_power: float | None = None
+    max_discharge_power: float | None = None
 
 
 @dataclass(frozen=True)

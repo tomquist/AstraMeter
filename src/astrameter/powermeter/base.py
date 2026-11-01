@@ -37,13 +37,17 @@ class Powermeter(ABC):
     @abstractmethod
     async def get_powermeter_watts(self) -> list[float]: ...
 
-    async def get_powermeter_watts_raw(self) -> list[float]:
-        """Per-phase watts before section/global processing wrappers.
+    async def get_passive_watts(self) -> list[float]:
+        """Per-phase watts for a reader that only reports them.
 
-        Used when a consumer (e.g. Marstek MQTT display) should match the physical
-        meter while control still uses :meth:`get_powermeter_watts`. Defaults to
-        the same values as :meth:`get_powermeter_watts` for sources with no inner
-        pipeline.
+        The passive route, for the Marstek MQTT display and cloud reporting:
+        the source's own reading, before offsets and filters, which never
+        feeds the processing chain and must not add load on the meter. The
+        ``LastReadingPowermeter`` the config loader puts around every source
+        answers it from the control loop's recent read, and reads the source
+        only when nothing else has lately. Control uses
+        :meth:`get_powermeter_watts` instead. Defaults to the same values as
+        :meth:`get_powermeter_watts` for a source with no wrappers.
         """
         return await self.get_powermeter_watts()
 

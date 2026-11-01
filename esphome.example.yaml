@@ -34,7 +34,7 @@ wifi:
   password: !secret wifi_password
 
 external_components:
-  - source: github://tomquist/astrameter@2.4.0
+  - source: github://tomquist/astrameter@2.5.0
     components: [ct002]
 
 # Uncomment to enable the `mqtt_insights:` sub-block (Home Assistant Device
@@ -90,6 +90,11 @@ ct002:
   # All keys below are optional; shown at their defaults.
   # power_sensor_l2: grid_l2       # three-phase only (set together with l3)
   # power_sensor_l3: grid_l3
+  # voltage_sensor_l1: grid_v_l1   # optional grid voltage per phase (V) and
+  # voltage_sensor_l2: grid_v_l2   # frequency (Hz). Not used for steering:
+  # voltage_sensor_l3: grid_v_l3   # the app's CT002 Diagnose and cloud
+  # frequency_sensor: grid_hz      # reporting report them (see
+  #                                # docs/esphome-powermeters.md)
   # ct_type: HME-4                 # HME-4 emulates a CT002, HME-3 a CT003.
   #                                # (The Python add-on has no ct_type option —
   #                                #  it derives this from DEVICE_TYPE=ct002/
@@ -135,17 +140,17 @@ ct002:
   #     max_step: 0                # 0 = no per-step clamp; e.g. 200 to cap
   #   deadband:
   #     deadband: 0                # 0 = off; e.g. 10 zeros out |sum| < 10 W
-  #   # PID is an ALTERNATIVE controller — do NOT combine it with
-  #   # active_control/balancer (two controllers fight; the PID integral
-  #   # winds up and, in bias mode, can invert the sign sent to the
-  #   # battery). Use it only with active_control: false. Disabled here
-  #   # (kp/ki/kd = 0 → zero output → pass-through in bias mode).
+  #   # PID: makes the battery react less strongly to each reading
+  #   # (it receives (1 - kp) x the real value, until the correction
+  #   # reaches output_max). Only useful with active_control: false,
+  #   # to calm a battery that swings back and forth.
+  #   # See docs/configuration.md#pid-controller.
   #   pid:
-  #     kp: 0.0                    # >0 enables; 0.5 is a sane start
-  #     ki: 0.0
-  #     kd: 0.0
+  #     kp: 0.0                    # 0 = no effect; use 0 < kp < 1, start at 0.5
+  #     ki: 0.0                    # leave at 0: above 0 the grid drifts to +/- output_max
+  #     kd: 0.0                    # leave at 0: tends to make swinging worse
   #     output_max: 800
-  #     mode: bias                 # bias or replace
+  #     mode: bias                 # leave at bias: replace makes the battery react the wrong way
 
   # Multi-battery load balancer tuning. Runs by default with these values
   # whenever active_control is true; omit/leave commented for a single
@@ -163,6 +168,8 @@ ct002:
   #   pace_max_step: 100           # pacing cap ceiling while tracking
   #   import_trim_w: 15            # cover the few W the firmware leaves importing in steady state; 0 = off
   #   min_dc_output: 0             # >0 keeps a DC battery (B2500) inverter awake
+  #   min_charge_power: 0          # below this a battery idles instead of charging; 0 = off
+  #   min_discharge_power: 0       # below this a battery idles instead of discharging; 0 = off
   #   min_efficient_power: 0       # >0 enables efficiency rotation
   #   probe_min_power: 80
   #   efficiency_rotation_interval: 15min
@@ -171,6 +178,13 @@ ct002:
   #   # Smooth the demand estimate so meter noise can't thrash batteries in and
   #   # out of the active pool. Lower = smoother; 1.0 = off.
   #   efficiency_demand_alpha: 0.1
+  #
+  # Not set by default, so not in the block above: add them to it to use them.
+  #   min_power_hysteresis: 20     # an idle battery starts again this many W above its minimum; unset = +20%
+  #   max_charge_power: 800        # most a battery charges at; unset = no limit, 0 = never
+  #   max_discharge_power: 800     # most a battery discharges at; unset = no limit, 0 = never
+  #   min_efficient_charge_power: 1200    # min_efficient_power while charging; unset = min_efficient_power, 0 = off
+  #   min_efficient_discharge_power: 375  # min_efficient_power while discharging; unset = min_efficient_power, 0 = off
 
   # Saturation tracker (detects a battery that can't follow its target and
   # backs off). Runs by default with these values; shown at defaults.
@@ -181,6 +195,26 @@ ct002:
   #   decay_factor: 0.995
   #   grace_seconds: 90s
   #   stall_timeout_seconds: 60s
+
+  # ── Optional sub-block: bluetooth ────────────────────────────────────
+  # The Bluetooth interface of a real CT002/CT003: the Marstek app finds this
+  # board in its regular "Add device" scan (as MST-TPM_xxxx for ct_type HME-4,
+  # MST-SMR_xxxx for HME-3), registers it in your account and shows live grid
+  # power over Bluetooth. See docs/ct002-ct003-ble.md.
+  #
+  # It is ON by default on ESP32 boards with Bluetooth and needs no block.
+  # `bluetooth: false` leaves the BLE stack out of the firmware, which frees
+  # RAM and flash on a tight build. The board stays on the `wifi:` networks
+  # above whatever the app sends. `allow_wifi_change: true` lets the network
+  # picked in the app replace them once the board connects to it; any phone
+  # in Bluetooth range could then change it, so it is off by default.
+  # bluetooth: false
+  # `allow_direction_change: true` lets the app's "Reverse Measurement
+  # Direction" flip a phase's measured power (CT002); also off by default,
+  # since a wrong setting makes the batteries work against the grid.
+  # bluetooth:
+  #   allow_wifi_change: true
+  #   allow_direction_change: true
 
   # ── Optional sub-block: dashboard ────────────────────────────────────
   # AstraMeter's live status dashboard, served from this board — the same
@@ -228,6 +262,8 @@ ct002:
   # and MQTT topics line up with the cloud-side record, and is persisted so
   # later boots skip the cloud flow. Uncomment together with the top-level
   # `http_request:` block above. Leave ct_mac blank when using this.
+  # Not needed on a board with Bluetooth, where the Marstek app adds the
+  # board itself; this is for an ESP32-S2/P4 or `bluetooth: false`.
   # marstek_registration:
   #   base_url: https://eu.hamedata.com   # https://us.hamedata.com for US
   #   mailbox: you@example.com
@@ -244,7 +280,8 @@ ct002:
   # the top-level `http_request:` block above. The cloud only stores
   # reports for a device id it already knows; the reported id is the CT's
   # MAC (ct_mac — the registered device's MAC when marstek_registration is
-  # configured). The model and firmware version are sent automatically.
+  # configured, or the CT the app added over Bluetooth when neither is set).
+  # The model and firmware version are sent automatically.
   # cloud_reporting:
   #   host: eu.hamedata.com
-  #   interval: 60s
+  #   interval: 300s

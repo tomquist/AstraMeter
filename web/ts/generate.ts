@@ -11,6 +11,7 @@ import {
   CT_ACTIVE,
   CT_BALANCER,
   CT_DC_KEEPALIVE,
+  CT_POWER_LIMITS,
   CT_EFFICIENCY,
   CT_SATURATION,
   CT_CLOUD,
@@ -163,6 +164,7 @@ function ctSection(state: State, sectionName: string): string {
     CT_ACTIVE,
     CT_BALANCER,
     CT_DC_KEEPALIVE,
+    CT_POWER_LIMITS,
     CT_EFFICIENCY,
     CT_SATURATION,
     CT_CLOUD,
@@ -684,7 +686,7 @@ function ct002OptionalBlocks(ct: { fields: Fields } | undefined): string[] {
   }
   // MIN_DC_OUTPUT is a per-battery knob in the UI, but its ESPHome key lives
   // under the same `balancer:` block.
-  for (const fld of CT_DC_KEEPALIVE) {
+  for (const fld of [...CT_DC_KEEPALIVE, ...CT_POWER_LIMITS]) {
     if (!isBlank(ctVal(fld.key))) bal.push(`${fld.ey}: ${ctVal(fld.key)}`);
   }
   for (const fld of CT_EFFICIENCY) {
@@ -885,6 +887,20 @@ export function generateEsphome(state: State): string {
     ctLines.push(dash.join("\n"));
   }
 
+  // A real meter's Bluetooth interface, on by default like the dashboard, so
+  // only switching it off is worth writing down.
+  if (state.general && state.general.esphomeBluetooth === false) {
+    ctLines.push(`${IND}bluetooth: false`);
+  } else if (state.general) {
+    // Both switches are off by default, so only "on" is written down.
+    const ble: string[] = [];
+    if (state.general.esphomeBluetoothAllowWifiChange === true) ble.push(`${IND}${IND}allow_wifi_change: true`);
+    if (state.general.esphomeBluetoothAllowDirectionChange === true) {
+      ble.push(`${IND}${IND}allow_direction_change: true`);
+    }
+    if (ble.length) ctLines.push([`${IND}bluetooth:`, ...ble].join("\n"));
+  }
+
   if (wantInsights) {
     const mf = state.mqttInsights.fields || {};
     const sub = [`${IND}mqtt_insights:`];
@@ -1010,8 +1026,15 @@ export function generateHomeAssistant(state: State): string {
   else if (ctf.ACTIVE_CONTROL === "False") add("active_control", false);
   add("peakshaving_threshold", ctf.PEAKSHAVING_THRESHOLD);
   add("min_efficient_power", ctf.MIN_EFFICIENT_POWER);
+  add("min_efficient_charge_power", ctf.MIN_EFFICIENT_CHARGE_POWER);
+  add("min_efficient_discharge_power", ctf.MIN_EFFICIENT_DISCHARGE_POWER);
   add("efficiency_rotation_interval", ctf.EFFICIENCY_ROTATION_INTERVAL);
   add("min_dc_output", ctf.MIN_DC_OUTPUT);
+  add("min_charge_power", ctf.MIN_CHARGE_POWER);
+  add("min_discharge_power", ctf.MIN_DISCHARGE_POWER);
+  add("min_power_hysteresis", ctf.MIN_POWER_HYSTERESIS);
+  add("max_charge_power", ctf.MAX_CHARGE_POWER);
+  add("max_discharge_power", ctf.MAX_DISCHARGE_POWER);
   // Probe window / stall escape for the efficiency rotation (the "saturation"
   // group); same 1:1 lower-cased mapping.
   add("saturation_grace_seconds", ctf.SATURATION_GRACE_SECONDS);

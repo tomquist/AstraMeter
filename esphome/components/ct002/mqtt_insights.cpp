@@ -17,6 +17,7 @@
 #include "esphome/core/application.h"
 #include "esphome/core/log.h"
 
+#include "cloud_reporting_url.h"
 #include "controls.h"
 #include "ha_discovery.h"
 
@@ -90,12 +91,13 @@ void MqttInsightsComponent::loop() {
   }
   this->was_connected_ = connected;
 
-  // Lazily subscribe to Marstek App topics once the MAC is known. Only
-  // poll while not yet subscribed (marstek_mac_ empty) so there's no
-  // steady-state per-loop cost; the MAC is applied once at boot by
-  // marstek_registration and cleared here only on disconnect, so a
-  // re-subscribe is driven by the reconnect path, not by polling.
-  if (connected && this->marstek_mqtt_enabled_ && this->marstek_mac_.empty()) {
+  // Lazily subscribe to Marstek App topics once the MAC is known, and again
+  // when it changes: without ct_mac, a Bluetooth board starts out on its own
+  // ID, which a first registration then replaces. The check compares the raw
+  // strings, so the steady state costs no allocation.
+  if (connected && this->marstek_mqtt_enabled_ &&
+      (this->marstek_mac_.empty() || this->ct002_->app_mac() != this->marstek_mac_source_ ||
+       this->ct002_->ct_type() != this->marstek_ct_type_)) {
     this->ensure_marstek_subscription_();
   }
 }
@@ -134,6 +136,7 @@ void MqttInsightsComponent::on_mqtt_disconnected_() {
   // Drop the subscription record so we re-subscribe on reconnect (the
   // broker forgets non-persistent subscriptions across a disconnect).
   this->marstek_mac_.clear();
+  this->marstek_mac_source_.clear();
   this->marstek_ct_type_.clear();
 }
 
@@ -164,12 +167,16 @@ void MqttInsightsComponent::ensure_marstek_subscription_() {
   if (!this->marstek_mqtt_enabled_) return;
   if (!this->mqtt_->is_connected()) return;
   // Resolve the current identity from ct002 each call — the MAC may be set
-  // by marstek_registration after we first connected.
-  const std::string mac = normalize_mac(this->ct002_->ct_mac());
+  // by marstek_registration after we first connected. Without ct_mac, a
+  // Bluetooth board answers as the ID the app added it under.
+  const std::string mac = normalize_mac(this->ct002_->app_mac());
   const std::string ct = this->ct002_->ct_type();
   if (mac.empty()) return;  // not known yet — try again next loop
   // marstek_mac_/marstek_ct_type_ hold the CURRENTLY-subscribed identity.
-  if (mac == this->marstek_mac_ && ct == this->marstek_ct_type_) return;  // already current
+  if (mac == this->marstek_mac_ && ct == this->marstek_ct_type_) {  // already current
+    this->marstek_mac_source_ = this->ct002_->app_mac();
+    return;
+  }
   // Identity changed (or first subscribe): drop the stale subscription.
   if (!this->marstek_mac_.empty()) {
     for (const auto &t : app_topics_for(this->marstek_ct_type_, this->marstek_mac_))
@@ -182,6 +189,7 @@ void MqttInsightsComponent::ensure_marstek_subscription_() {
         0);
   }
   this->marstek_mac_ = mac;
+  this->marstek_mac_source_ = this->ct002_->app_mac();
   this->marstek_ct_type_ = ct;
   ESP_LOGI(TAG, "Marstek MQTT: subscribed App topics for %s/%s", ct.c_str(), mac.c_str());
 }
@@ -287,6 +295,10 @@ void MqttInsightsComponent::publish_consumer_event_(const std::string &consumer_
     } else {
       root["min_dc_output"] = nullptr;
     }
+    root["min_charge_power"] = snap.min_charge_power;
+    root["min_discharge_power"] = snap.min_discharge_power;
+    root["max_charge_power"] = snap.max_charge_power;
+    root["max_discharge_power"] = snap.max_discharge_power;
   });
   if (!this->mqtt_->publish(state_topic, state_buf, 0, true))
     this->forget_state_publish_(consumer_id);
@@ -529,6 +541,24 @@ void MqttInsightsComponent::handle_consumer_field_command_(const std::string &co
     } else {
       ESP_LOGW(TAG, "Out-of-range min_dc_output for %s: %.1f", consumer_id.c_str(), v);
     }
+  } else if (field == "min_charge_power" || field == "min_discharge_power" ||
+             field == "max_charge_power" || field == "max_discharge_power") {
+    float v;
+    if (!parse_float_payload(payload, v)) {
+      ESP_LOGW(TAG, "Invalid %s for %s: %s", field.c_str(), consumer_id.c_str(), payload.c_str());
+    } else if (std::isfinite(v) && v >= 0.0f && v <= controls::BATTERY_POWER_MAX) {
+      if (field == "min_charge_power") {
+        this->ct002_->set_consumer_min_charge_power(consumer_id, v);
+      } else if (field == "min_discharge_power") {
+        this->ct002_->set_consumer_min_discharge_power(consumer_id, v);
+      } else if (field == "max_charge_power") {
+        this->ct002_->set_consumer_max_charge_power(consumer_id, v);
+      } else {
+        this->ct002_->set_consumer_max_discharge_power(consumer_id, v);
+      }
+    } else {
+      ESP_LOGW(TAG, "Out-of-range %s for %s: %.1f", field.c_str(), consumer_id.c_str(), v);
+    }
   }
 }
 
@@ -645,16 +675,11 @@ void MqttInsightsComponent::publish_marstek_reply_(const PollContext &poll) {
     }
     body = format_cd4_slave_csv(rows);
   } else {
-    // ver_v is hardcoded to DEFAULT_VER_V here. Python derives it per-binding
-    // from the Marstek cloud device list's `version` field
-    // (ver_v_from_marstek_api_version), but on the ESPHome path that value
-    // isn't plumbed from marstek_registration into the responder — and when
-    // the cloud `version` is absent Python falls back to this same default,
-    // so the wire frame matches the common case. Wiring the real firmware
-    // version through would be a registration↔insights data flow we don't
-    // have yet.
+    // A real CT reports its own firmware version as `ver_v`, the same constant
+    // it sends as the handshake's `sv` and over Bluetooth. Mirrors main.py's
+    // _bind_marstek_responder.
     body = build_aggregate_response(this->ct002_->latest_grid_power(), this->ct002_->wifi_rssi(),
-                                    DEFAULT_VER_V,
+                                    cloud_reporting::reporting_firmware_version(this->marstek_ct_type_),
                                     static_cast<int>(this->ct002_->connected_slave_count()),
                                     /*echo_cd1=*/true);
   }
@@ -676,7 +701,7 @@ void MqttInsightsComponent::dump_config() {
   // ct_mac is resolved lazily at connect time; at dump_config (boot) it
   // may legitimately still be empty if marstek_registration hasn't applied
   // it yet — the App-topic subscribe happens once it's known.
-  const std::string mac_now = normalize_mac(this->ct002_->ct_mac());
+  const std::string mac_now = normalize_mac(this->ct002_->app_mac());
   ESP_LOGCONFIG(TAG, "  Marstek MAC: %s",
                 mac_now.empty() ? "(pending — subscribe deferred until MAC known)"
                                 : mac_now.c_str());

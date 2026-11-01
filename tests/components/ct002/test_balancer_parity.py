@@ -18,6 +18,7 @@ from __future__ import annotations
 import random
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -97,6 +98,11 @@ class PyDriver:
         self.clock = _Clock()
         self.balancer: LoadBalancer | None = None
         self.out: list[str] = []
+        self.min_power = (0.0, 0.0)
+        self.max_power: tuple[float | None, float | None] = (None, None)
+        self.hysteresis: float | None = None
+        self.efficient_power: tuple[float | None, float | None] = (None, None)
+        self.power_overrides: dict[str, tuple[float, ...]] = {}
 
     def feed(self, line: str) -> None:
         parts = line.split()
@@ -138,9 +144,16 @@ class PyDriver:
             cfg = BalancerConfig(
                 fair_distribution=bool(int(fair)),
                 min_efficient_power=float(min_eff),
+                min_efficient_charge_power=self.efficient_power[0],
+                min_efficient_discharge_power=self.efficient_power[1],
                 efficiency_rotation_interval=float(rot),
                 efficiency_saturation_threshold=float(sat_threshold),
                 min_dc_output=min_dc,
+                min_charge_power=self.min_power[0],
+                min_discharge_power=self.min_power[1],
+                min_power_hysteresis=self.hysteresis,
+                max_charge_power=self.max_power[0],
+                max_discharge_power=self.max_power[1],
                 **pace_kwargs,
             )
             self.balancer = LoadBalancer(
@@ -154,6 +167,24 @@ class PyDriver:
                 clock=self.clock,
                 reset_fn=None,
             )
+        elif cmd == "minpow":
+            self.min_power = (float(parts[1]), float(parts[2]))
+        elif cmd == "hyst":
+            self.hysteresis = None if float(parts[1]) < 0 else float(parts[1])
+        elif cmd == "effdir":
+            self.efficient_power = tuple(  # type: ignore[assignment]
+                None if float(v) < 0 else float(v) for v in parts[1:3]
+            )
+        elif cmd == "maxpow":
+            self.max_power = tuple(  # type: ignore[assignment]
+                None if float(v) < 0 else float(v) for v in parts[1:3]
+            )
+        elif cmd == "override":
+            values = [float(v) for v in parts[2:]]
+            self.power_overrides[parts[1]] = tuple(values + [-1.0] * (4 - len(values)))
+        elif cmd == "idle":
+            snap = self.balancer.snapshot_consumer(parts[1])
+            self.out.append("1" if snap is not None and snap.min_power_idle else "0")
         elif cmd == "clock":
             self.clock.now = float(parts[1])
         elif cmd == "advance":
@@ -169,15 +200,24 @@ class PyDriver:
             reports = {}
             i = 6
             for _ in range(n):
-                rc, dev, phase, power, md, eww = parts[i : i + 6]
+                rc, dev, phase, power, md, eww, weight = parts[i : i + 7]
+                limits = [
+                    None if v < 0 else v
+                    for v in self.power_overrides.get(rc, (-1.0,) * 4)
+                ]
                 reports[rc] = ConsumerReport(
+                    min_charge_power=limits[0],
+                    min_discharge_power=limits[1],
+                    max_charge_power=limits[2],
+                    max_discharge_power=limits[3],
                     device_type=dev,
                     phase=phase,
                     power=int(power),
+                    weight=float(weight),
                     min_dc_output=None if float(md) < 0 else float(md),
                     efficiency_window_weight=float(eww),
                 )
-                i += 6
+                i += 7
             res = self.balancer.compute_target(
                 cid,
                 ConsumerMode(mode, float(manual)),
@@ -267,10 +307,11 @@ def _report(
     dev: str = "HMA-2",
     min_dc: float = -1.0,
     eff_weight: float = 1.0,
+    weight: float = 1.0,
 ) -> str:
     # min_dc < 0 encodes "unset" (inherit global / None). The efficiency-window
-    # weight token is always emitted (default 1.0 = neutral).
-    return f"{cid} {dev} {phase} {power} {min_dc} {eff_weight}"
+    # and distribution weight tokens are always emitted (default 1.0 = neutral).
+    return f"{cid} {dev} {phase} {power} {min_dc} {eff_weight} {weight}"
 
 
 def _target(
@@ -343,14 +384,44 @@ def _scenario_efficiency_lifecycle() -> list[str]:
     return lines
 
 
+def _scenario_efficiency_per_direction(charge: float, discharge: float) -> list[str]:
+    """Separate charge / discharge efficiency thresholds (issue #642).
+
+    Two batteries charge from a surplus, cross zero into a load, sit on a
+    demand that hovers at 0 W (which must not switch thresholds), and go back
+    to charging.  Both stacks have to pick the same threshold on every poll and
+    keep the same active set across the crossing.
+    """
+    lines = [f"effdir {charge} {discharge}", _CFG_EFFICIENCY, "clock 5000"]
+
+    def tick(a: int, b: int, grid: float) -> None:
+        pool = [_report("x", "A", a, "VNSE3"), _report("y", "A", b, "VNSE3")]
+        for cid in ("x", "y"):
+            lines.append(_target(cid, pool, grid=grid))
+            lines.append(f"last {cid}")
+        lines.append("advance 1")
+
+    for _ in range(15):
+        tick(-400, 0, -400)
+    for _ in range(15):
+        tick(-800, 0, 0)
+    for _ in range(25):
+        tick(0, 0, 500)
+    for i in range(20):
+        tick(0, 0, 40 if i % 2 else -40)
+    for _ in range(25):
+        tick(0, 0, -900)
+    return lines
+
+
 def _scenario_efficiency_window_weight() -> list[str]:
-    """Per-battery efficiency-window weight: a parked unit (0) stays
+    """Per-battery efficiency-window weight: a backup unit (0) stays
     deprioritized while limiting, a half-weight head rotates out at half the
     interval, unequal non-zero weights hand each unit a proportional turn, and a
     fresh pool fills heaviest-first even when that contradicts id order. Both
     stacks must agree poll-by-poll on the resulting targets."""
     lines = [_CFG_EFFICIENCY, "clock 5000"]
-    # "y" is parked for efficiency (weight 0); under low demand it must stay
+    # "y" is the backup (weight 0); under low demand it must stay
     # deprioritized while "x" carries the load.
     parked = [
         _report("x", "A", 0, eff_weight=1.0),
@@ -489,6 +560,89 @@ def _scenario_min_dc_output() -> list[str]:
     return lines
 
 
+def _scenario_min_power(hysteresis: float | None = None) -> list[str]:
+    """Exercise MIN_CHARGE_POWER / MIN_DISCHARGE_POWER (issue #721): a pool of
+    three on one phase whose demand sweeps through every minimum in both
+    directions, so batteries drop out one at a time, resume past the
+    hysteresis, and one battery's own override is judged on its own.  With
+    *hysteresis*, the start point is that far above the minimum, and battery
+    b's discharge cap sits inside the gap so the start point is held there."""
+    lines = [
+        "minpow 60 50",
+        *([f"hyst {hysteresis}", "override b -1 -1 -1 70"] if hysteresis else []),
+        "cfg 1 0 900 0.4 0.15 20 90 1 0 30 100 0 15",
+        "override c -1 120",
+        "clock 2000",
+    ]
+    # (grid, output of a, b, c) per tick: idle standby, a step up through the
+    # minimums, back down, into a surplus and out again.
+    ticks = [
+        (19, 0, 0, 0),
+        (70, 0, 0, 0),
+        (40, 30, 0, 0),
+        (130, 0, 0, 0),
+        (60, 70, 0, 0),
+        (400, 0, 0, 0),
+        (100, 150, 150, 0),
+        (-120, 150, 150, 0),
+        (-30, 60, 0, 0),
+        (-100, 0, 0, 0),
+        (-200, 0, 0, 0),
+        (-50, -100, -100, 0),
+        (-400, 0, 0, 0),
+        (40, -60, -60, -60),
+        (300, 0, 0, 0),
+    ]
+    for grid, *outputs in ticks:
+        for _ in range(2):
+            pool = [
+                _report(cid, "A", power, "HMG-50")
+                for cid, power in zip("abc", outputs, strict=True)
+            ]
+            for cid in "abc":
+                lines.append(_target(cid, pool, grid=grid))
+                lines.append(f"idle {cid}")
+                lines.append(f"last {cid}")
+            lines.append("advance 1")
+    return lines
+
+
+def _scenario_max_power() -> list[str]:
+    """Exercise MAX_CHARGE_POWER / MAX_DISCHARGE_POWER: a global discharge cap,
+    one battery's own caps (one of them 0, keeping it out of charging) and one
+    lifted to the top of the range, so the others take the overflow in both
+    directions."""
+    lines = [
+        "maxpow -1 400",
+        "cfg 1 0 900 0.4 0.15 20 90 1 0 30 100 0 15",
+        "override b -1 -1 0 250",
+        "override c -1 -1 -1 11040",
+        "clock 2000",
+    ]
+    ticks = [
+        (900, 0, 0, 0),
+        (500, 300, 200, 0),
+        (200, 400, 250, 300),
+        (1500, 400, 250, 300),
+        (-300, 400, 250, 300),
+        (-900, 0, 0, 0),
+        (-200, -300, 0, -300),
+        (600, -300, 0, -300),
+    ]
+    for grid, *outputs in ticks:
+        for _ in range(2):
+            pool = [
+                _report(cid, "A", power, "HMG-50")
+                for cid, power in zip("abc", outputs, strict=True)
+            ]
+            for cid in "abc":
+                lines.append(_target(cid, pool, grid=grid))
+                lines.append(f"last {cid}")
+                lines.append(f"intent {cid}")
+            lines.append("advance 1")
+    return lines
+
+
 def _scenario_import_trim() -> list[str]:
     """Hold a steady small grid import for many polls so the steady-import trim
     engages (dwell crosses IMPORT_TRIM_DWELL), then drop into export so the dwell
@@ -567,6 +721,53 @@ def _scenario_power_ceilings() -> list[str]:
     return lines
 
 
+def _scenario_skewed_weights() -> list[str]:
+    """Distribution weights of 10 and 0.1 (discussion #741).
+
+    The light unit starts tens of watts off its share; the heavy unit then
+    runs into its charge ceiling, which both stacks learn, and the light one
+    takes the rest.  A swing to load turns the shares around, the heavy unit
+    then stops following, and a DC-only light unit closes the scenario.
+    """
+    lines = ["cfg 1 0 900 0.4 0.15 20 90 1 0 0 0", "clock 5000"]
+
+    def pool(a: int, b: int, dev_b: str = "VNSE3") -> list[str]:
+        return [
+            _report("a", "A", a, "VNSE3", weight=10.0),
+            _report("b", "A", b, dev_b, weight=0.1),
+        ]
+
+    def tick(a: int, b: int, grid: float, dev_b: str = "VNSE3") -> None:
+        for cid in ("a", "b"):
+            lines.append(_target(cid, pool(a, b, dev_b), grid=grid))
+            lines.append(f"last {cid}")
+            lines.append(f"sat {cid}")
+        lines.append("advance 1")
+
+    # Stalled overflow under a modest surplus.
+    for _ in range(3):
+        tick(-1252, -64, -10)
+    # The priority unit holds at 2500 W charge while the surplus grows.
+    for _ in range(10):
+        tick(-2500, 0, -1000)
+    tick(-2500, -600, -400)
+    # Swing to load: the overflow is discharging nothing it should.
+    for _ in range(3):
+        tick(300, -600, 900)
+    # The priority unit stops following (full) under a surplus.
+    for _ in range(12):
+        tick(0, 0, -800)
+    # A DC-only light unit.
+    for _ in range(3):
+        tick(400, 60, -20, dev_b="HMA-2")
+    return lines
+
+
+def test_parity_skewed_weights(harness: Path) -> None:
+    lines = _scenario_skewed_weights()
+    _compare("skewed_weights", lines, _run_cpp(harness, lines), _run_py(lines))
+
+
 def test_parity_power_ceilings(harness: Path) -> None:
     lines = _scenario_power_ceilings()
     _compare("power_ceilings", lines, _run_cpp(harness, lines), _run_py(lines))
@@ -575,6 +776,35 @@ def test_parity_power_ceilings(harness: Path) -> None:
 def test_parity_import_trim(harness: Path) -> None:
     lines = _scenario_import_trim()
     _compare("import_trim", lines, _run_cpp(harness, lines), _run_py(lines))
+
+
+def test_parity_min_power(harness: Path) -> None:
+    lines = _scenario_min_power()
+    _compare("min_power", lines, _run_cpp(harness, lines), _run_py(lines))
+
+
+def test_parity_min_power_hysteresis(harness: Path) -> None:
+    lines = _scenario_min_power(hysteresis=40.0)
+    _compare("min_power_hysteresis", lines, _run_cpp(harness, lines), _run_py(lines))
+
+
+@pytest.mark.parametrize(
+    ("charge", "discharge"),
+    [(1200.0, 375.0), (600.0, 0.0), (0.0, -1.0)],
+    ids=["charge_above_discharge", "charge_only", "discharge_only"],
+)
+def test_parity_efficiency_per_direction(
+    harness: Path, charge: float, discharge: float
+) -> None:
+    lines = _scenario_efficiency_per_direction(charge, discharge)
+    _compare(
+        "efficiency_per_direction", lines, _run_cpp(harness, lines), _run_py(lines)
+    )
+
+
+def test_parity_max_power(harness: Path) -> None:
+    lines = _scenario_max_power()
+    _compare("max_power", lines, _run_cpp(harness, lines), _run_py(lines))
 
 
 def test_parity_min_dc_output(harness: Path) -> None:
@@ -597,6 +827,221 @@ def test_parity_efficiency_window_weight(harness: Path) -> None:
     _compare(
         "efficiency_window_weight", lines, _run_cpp(harness, lines), _run_py(lines)
     )
+
+
+# ---------------------------------------------------------------------------
+# Closed-loop streams: the standby reserve (efficiency mode).
+#
+# The reserve only engages once a battery ahead is out of headroom — at a
+# learned ceiling, saturated, or DC-only under a surplus — which takes reports
+# that follow the balancer's own commands over many polls.  These streams are
+# recorded by steering a minimal plant with the Python driver, then replayed
+# through both stacks, so the comparison runs over realistic trajectories.
+# ---------------------------------------------------------------------------
+
+
+class _Plant:
+    """Adds each reading to its output, within its limits, in whole watts."""
+
+    def __init__(
+        self,
+        dev: str = "VNSE3",
+        *,
+        discharge: float = 800.0,
+        charge: float = 2500.0,
+        window: float = 1.0,
+        phase: str = "A",
+    ) -> None:
+        self.dev = dev
+        self.discharge = discharge
+        self.charge = 0.0 if dev.startswith(("HMA", "HMJ", "HMK")) else charge
+        self.window = window
+        self.phase = phase
+        self.power = 0
+        self.full = False
+        self.empty = False
+
+    def step(self, reading: float) -> None:
+        hi = 0.0 if self.empty else self.discharge
+        lo = 0.0 if self.full else -self.charge
+        self.power = round(max(lo, min(hi, self.power + reading)))
+
+
+def _closed_loop_stream(
+    cfg: str,
+    plants: dict[str, _Plant],
+    schedule: list[tuple[float, int]],
+    *,
+    meter_every: int = 1,
+    events: dict[int, Callable[[dict[str, _Plant]], None]] | None = None,
+) -> tuple[list[str], int]:
+    """Record a closed-loop stream; also return how many polls spilled.
+
+    The meter carries a few watts of noise, as a real one does.  A noiseless
+    meter settles the loop onto exact cancellations, where the two stacks'
+    float and double arithmetic leave residues of opposite sign (around
+    1e-8 W) that the deadband concentration and the oscillation damper then
+    branch on — a precision artefact of the comparison, not a divergence of
+    the logic.
+    """
+    driver = PyDriver()
+    noise = random.Random(len(plants) * 1000 + len(schedule))
+    lines = [cfg, "clock 10000"]
+    for line in lines:
+        driver.feed(line)
+    tick = 0
+    spilled = 0
+    grid = 0.0
+    for load, n in schedule:
+        for _ in range(n):
+            if events and tick in events:
+                events[tick](plants)
+            # A slow meter repeats its reading, and with it its sample id.
+            if tick % meter_every == 0:
+                grid = round(
+                    load
+                    - sum(b.power for b in plants.values())
+                    + noise.choice((-6.3, -3.7, -1.4, 1.6, 3.4, 5.8))
+                )
+            pool = [
+                _report(cid, b.phase, b.power, b.dev, eff_weight=b.window)
+                for cid, b in plants.items()
+            ]
+            readings = {}
+            for cid in plants:
+                line = _target(cid, pool, grid=grid)
+                lines.append(line)
+                driver.feed(line)
+                readings[cid] = sum(float(v) for v in driver.out[-1].split())
+                assert driver.balancer is not None
+                spilled += bool(driver.balancer._spilling)
+            for cid in plants:
+                lines += [f"last {cid}", f"intent {cid}", f"sat {cid}"]
+            for cid, b in plants.items():
+                b.step(readings[cid])
+            lines.append("advance 1")
+            driver.feed("advance 1")
+            tick += 1
+    return lines, spilled
+
+
+# Efficiency mode at a floor no single battery reaches, with no timed rotation:
+# one head, the rest standby.  Saturation detection on.
+_CFG_RESERVE = "cfg 1 2500 86400 0.4 0.15 20 90 1"
+
+
+def _set(cid: str, **attrs: bool) -> Callable[[dict[str, _Plant]], None]:
+    def apply(plants: dict[str, _Plant]) -> None:
+        for name, value in attrs.items():
+            setattr(plants[cid], name, value)
+
+    return apply
+
+
+def _reserve_streams() -> dict[str, tuple[list[str], int]]:
+    return {
+        # The head's 800 W ceiling: overflow, last-in-first-out give-back,
+        # overflow again, then a surplus.
+        "overflow_lifo": _closed_loop_stream(
+            _CFG_RESERVE,
+            {"a": _Plant(), "b": _Plant()},
+            [(600, 60), (1200, 150), (700, 100), (1200, 60), (-900, 60)],
+        ),
+        # A 0 % window backup behind a head that empties, then fills.
+        "backup_takes_over": _closed_loop_stream(
+            _CFG_RESERVE,
+            {"a": _Plant(), "b": _Plant(window=0.0)},
+            [(500, 180), (-1000, 60), (-1000, 120)],
+            events={60: _set("a", empty=True), 180: _set("a", empty=False, full=True)},
+        ),
+        # A DC-only standby first in line under a surplus is passed over.
+        "dc_standby_surplus": _closed_loop_stream(
+            _CFG_RESERVE,
+            {"a": _Plant(), "b": _Plant("HMJ-2"), "c": _Plant()},
+            [(-800, 180), (1500, 120)],
+            events={60: _set("a", full=True)},
+        ),
+        # Rotation every two minutes while the head's ceiling binds: probes and
+        # fades run with a spilling standby.
+        "handoffs": _closed_loop_stream(
+            "cfg 1 2500 120 0.4 0.15 20 90 1",
+            {"a": _Plant(), "b": _Plant(), "c": _Plant()},
+            [(1200, 420)],
+        ),
+        # A meter repeating its reading for ten polls while the head empties.
+        "repeating_meter": _closed_loop_stream(
+            _CFG_RESERVE,
+            {"a": _Plant(), "b": _Plant(window=0.0)},
+            [(400, 240)],
+            meter_every=10,
+            events={80: _set("a", empty=True)},
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "overflow_lifo",
+        "backup_takes_over",
+        "dc_standby_surplus",
+        "handoffs",
+        "repeating_meter",
+    ],
+)
+def test_parity_standby_reserve(harness: Path, name: str) -> None:
+    lines, spilled = _reserve_streams()[name]
+    # The stream has to exercise what it is named for.
+    assert spilled > 0, f"{name}: the standby reserve never engaged"
+    _compare(f"reserve[{name}]", lines, _run_cpp(harness, lines), _run_py(lines))
+
+
+def _random_reserve_stream(seed: int) -> tuple[list[str], int]:
+    """A closed-loop stream over a random fleet, floor, schedule and faults.
+
+    Mixed device types (a DC-only B2500 among them), discharge limits that a
+    ceiling is learned at, efficiency window weights including 0, a random
+    load / surplus schedule, a battery emptying or filling part-way, and
+    sometimes a slow meter.
+    """
+    rng = random.Random(10_000 + seed)
+    min_eff = rng.choice([400, 1200, 2500])
+    rot = rng.choice([120, 900, 86400])
+    cfg = f"cfg 1 {min_eff} {rot} 0.4 0.15 20 90 1"
+    plants: dict[str, _Plant] = {}
+    for cid in ("a", "b", "c")[: rng.randint(2, 3)]:
+        plants[cid] = _Plant(
+            rng.choice(["VNSE3", "VNSE3", "HMG-50", "HMJ-2"]),
+            discharge=rng.choice([600.0, 800.0, 1200.0]),
+            charge=rng.choice([1200.0, 2500.0]),
+            window=rng.choice([1.0, 1.0, 0.5, 0.0]),
+        )
+    schedule = [
+        (rng.choice([-1500, -700, 300, 700, 1100, 1600, 2200]), rng.randint(30, 90))
+        for _ in range(rng.randint(3, 5))
+    ]
+    fault_at = rng.randint(20, 120)
+    fault_cid = rng.choice(list(plants))
+    fault = rng.choice(["empty", "full"])
+    return _closed_loop_stream(
+        cfg,
+        plants,
+        schedule,
+        meter_every=rng.choice([1, 1, 3]),
+        events={fault_at: _set(fault_cid, **{fault: True})},
+    )
+
+
+@pytest.mark.parametrize("seed", range(16))
+def test_parity_fuzz_standby_reserve(harness: Path, seed: int) -> None:
+    lines, _ = _random_reserve_stream(seed)
+    _compare(f"reserve_fuzz[{seed}]", lines, _run_cpp(harness, lines), _run_py(lines))
+
+
+def test_reserve_fuzz_engages_the_reserve() -> None:
+    """The randomized reserve streams are not all idle ones."""
+    engaged = sum(_random_reserve_stream(seed)[1] > 0 for seed in range(16))
+    assert engaged >= 8
 
 
 # ---------------------------------------------------------------------------
@@ -662,6 +1107,11 @@ def _random_stream(seed: int, n_polls: int) -> list[str]:
     # Per-consumer efficiency-window weight: mostly neutral, sometimes parked (0)
     # or partial, to exercise the weight-driven sink/rotation across stacks.
     eff_weights = {cid: rng.choice([1.0, 1.0, 1.0, 0.0, 0.5, 0.25]) for cid in cids}
+    # Distribution weights, drawn from their own generator so the streams the
+    # draws above produce stay as they were: mostly neutral, sometimes a
+    # strongly skewed split or a parked unit.
+    wrng = random.Random(seed + 1_000_000)
+    weights = {cid: wrng.choice([1.0, 1.0, 1.0, 10.0, 0.1, 0.5, 0.0]) for cid in cids}
     for _ in range(n_polls):
         grid = rng.choice([-901, -300, -150, -1, 0, 1, 100, 300, 450, 901, 1500])
         powers = {cid: rng.choice([-200, -50, 0, 0, 50, 200]) for cid in cids}
@@ -673,6 +1123,7 @@ def _random_stream(seed: int, n_polls: int) -> list[str]:
                 devs[cid],
                 overrides[cid],
                 eff_weights[cid],
+                weights[cid],
             )
             for cid in cids
         ]

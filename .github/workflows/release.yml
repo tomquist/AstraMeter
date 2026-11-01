@@ -75,13 +75,38 @@ jobs:
           VERSION: ${{ github.event.inputs.version }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
 
+      - name: Extract release notes from CHANGELOG.md
+        # Reads the tagged CHANGELOG.md (release.sh renamed "## Next" to "## <version>")
+        # and keeps that section's body, minus surrounding blank lines. Never fails:
+        # main and the tag are already pushed, so an empty section only drops the notes.
+        run: |
+          notes="$RUNNER_TEMP/release-notes.md"
+          { git show "refs/tags/${VERSION}:CHANGELOG.md" || true; } | awk -v heading="## ${VERSION}" '
+            $0 == heading { in_section = 1; next }
+            in_section && /^## / { exit }
+            in_section { lines[++n] = $0 }
+            END {
+              first = 1; while (first <= n && lines[first] ~ /^[[:space:]]*$/) first++
+              last = n;  while (last >= first && lines[last] ~ /^[[:space:]]*$/) last--
+              for (i = first; i <= last; i++) print lines[i]
+            }
+          ' >"$notes"
+          if [ ! -s "$notes" ]; then
+            echo "::warning::No '## ${VERSION}' section found in CHANGELOG.md; the release links to it only."
+          else
+            echo "" >>"$notes"
+          fi
+          echo "**Full changelog:** [CHANGELOG.md](${SERVER_URL}/${REPOSITORY}/blob/${VERSION}/CHANGELOG.md)" >>"$notes"
+          cat "$notes"
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           token: ${{ steps.app-token.outputs.token }}
           tag_name: ${{ github.event.inputs.version }}
           name: Release v${{ github.event.inputs.version }}
-          body: |
-            Release v${{ github.event.inputs.version }}
-
-            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.event.inputs.version }}/CHANGELOG.md) for details.
+          body_path: ${{ runner.temp }}/release-notes.md

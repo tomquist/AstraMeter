@@ -379,12 +379,13 @@ def build_ct002_consumer_discovery(
 
     # Efficiency window weight — how much of the efficiency rotation window this
     # battery participates in, as a percentage.  100 % is neutral (full
-    # participation); 0 % skips the battery for efficiency (parked while
-    # limiting); intermediate values give it proportionally less active time
-    # while low demand runs one battery at a time.
+    # participation); 0 % makes it a backup that never leads but covers what
+    # the batteries ahead cannot; intermediate values give it proportionally
+    # less active time while low demand runs one battery at a time.
     # Surfaced as a percentage; the internal value is a 0-1 fraction.  Only
-    # meaningful when efficiency rotation is enabled (``min_efficient_power >
-    # 0``); without it every battery stays active, so don't surface the entity.
+    # meaningful when efficiency rotation is enabled in either direction
+    # (``min_efficient_power``, or its charge / discharge override, above 0);
+    # without it every battery stays active, so don't surface the entity.
     if efficiency_rotation:
         components["efficiency_window_weight"] = number(
             "efficiency_window_weight",
@@ -411,6 +412,47 @@ def build_ct002_consumer_discovery(
             mode="box",
             template="{{ value_json.min_dc_output | default(0) }}",
         )
+
+    # Min Charge / Min Discharge Power — below these a battery idles at 0 W
+    # rather than run at a few watts, where its inverter is least efficient.
+    components["min_charge_power"] = number(
+        "min_charge_power",
+        "Min Charge Power",
+        unit="W",
+        device_class="power",
+        step=1,
+        mode="box",
+        template="{{ value_json.min_charge_power | default(0) }}",
+    )
+    components["min_discharge_power"] = number(
+        "min_discharge_power",
+        "Min Discharge Power",
+        unit="W",
+        device_class="power",
+        step=1,
+        mode="box",
+        template="{{ value_json.min_discharge_power | default(0) }}",
+    )
+    # Max Charge / Max Discharge Power — the most a battery is asked for; the
+    # top of the range is no limit.
+    components["max_charge_power"] = number(
+        "max_charge_power",
+        "Max Charge Power",
+        unit="W",
+        device_class="power",
+        step=1,
+        mode="box",
+        template="{{ value_json.max_charge_power | default(11040) }}",
+    )
+    components["max_discharge_power"] = number(
+        "max_discharge_power",
+        "Max Discharge Power",
+        unit="W",
+        device_class="power",
+        step=1,
+        mode="box",
+        template="{{ value_json.max_discharge_power | default(11040) }}",
+    )
 
     mac_slug = _sanitize_id(consumer_id).lower().replace("-", "").replace("_", "")
 
@@ -627,8 +669,9 @@ def build_ct002_device_discovery(
     }
 
     # The Force Rotation button only does anything when efficiency rotation is
-    # enabled (``min_efficient_power > 0``); without it the balancer keeps every
-    # battery active and there's nothing to rotate, so don't surface the button.
+    # enabled in either direction (``BalancerConfig.efficiency_enabled``);
+    # without it the balancer keeps every battery active and there's nothing to
+    # rotate, so don't surface the button.
     if efficiency_rotation:
         components["force_rotation"] = {
             "platform": "button",
