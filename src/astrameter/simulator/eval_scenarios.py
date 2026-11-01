@@ -955,6 +955,34 @@ def build_scenarios() -> dict[str, Scenario]:
             ct_kwargs=dict(prio_mode),
         )
     )
+    # Issue #642: a Venus E pair (2500 W charge, 800 W discharge) sharing the
+    # discharge from ~750 W at MIN_EFFICIENT_POWER 375, but charging on one
+    # battery until the surplus reaches 1200 W. /eff375 is the same fleet on
+    # the single threshold; /charge1200 adds MIN_EFFICIENT_CHARGE_POWER.
+    eff642 = {**_EFF_MODE, "min_efficient_power": 375.0}
+    for suffix, charge_kwargs in (
+        ("eff375", {}),
+        ("charge1200", {"min_efficient_charge_power": 1200.0}),
+    ):
+        add(
+            Scenario(
+                name=f"venus_e_pair_solar/{suffix}",
+                description="Venus E pair, MIN_EFFICIENT_POWER 375"
+                + (", MIN_EFFICIENT_CHARGE_POWER 1200" if charge_kwargs else "")
+                + ": household + solar crossing into a surplus both can take",
+                batteries=[
+                    replace(venus_e, initial_soc=0.4),
+                    replace(venus_e, initial_soc=0.4),
+                ],
+                duration_s=dur_solar,
+                base_load=[400.0, 0.0, 0.0],
+                loads=list(_HOUSEHOLD_LOADS),
+                build_events=lambda rng: _household_and_solar(
+                    rng, dur_solar, solar_peak_house
+                ),
+                ct_kwargs={**eff642, **charge_kwargs},
+            )
+        )
     # The same fleet steered by the Distribution Weight cascade (10 / 0.1).
     add(
         Scenario(

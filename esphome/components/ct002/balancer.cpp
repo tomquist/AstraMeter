@@ -157,6 +157,10 @@ void BalancerConfig::clamp() {
   if (max_correction_per_step < 0.0f) max_correction_per_step = 0.0f;
   if (max_target_step < 0.0f) max_target_step = 0.0f;
   if (min_efficient_power < 0.0f) min_efficient_power = 0.0f;
+  if (min_efficient_charge_power && *min_efficient_charge_power < 0.0f)
+    min_efficient_charge_power = 0.0f;
+  if (min_efficient_discharge_power && *min_efficient_discharge_power < 0.0f)
+    min_efficient_discharge_power = 0.0f;
   if (probe_min_power < 0.0f) probe_min_power = 0.0f;
   if (efficiency_rotation_interval < 1.0f) efficiency_rotation_interval = 1.0f;
   clamp_v(efficiency_fade_alpha, 0.01f, 1.0f);
@@ -1784,7 +1788,7 @@ void LoadBalancer::drop_spiller_(const std::string &consumer_id) {
 void LoadBalancer::update_spill_(const ReportMap &reports, float control_grid,
                                  const std::unordered_map<std::string, float> &faded,
                                  const std::unordered_set<std::string> &charge_blind) {
-  if (this->cfg_.min_efficient_power <= 0.0f || reports.size() < 2) {
+  if (!this->cfg_.efficiency_enabled() || reports.size() < 2) {
     if (!this->spilling_.empty() || this->spill_free_since_.has_value()) this->clear_spill_();
     return;
   }
@@ -2390,7 +2394,7 @@ void LoadBalancer::probe_active_set_change_(const std::vector<std::string> &prev
 std::unordered_map<std::string, float> LoadBalancer::compute_efficiency_deprioritized_(
     const ReportMap &reports, const std::vector<float> &sample_id, float grid_total) {
   const auto &cfg = this->cfg_;
-  if (cfg.min_efficient_power <= 0.0f || reports.size() < 2) {
+  if (!cfg.efficiency_enabled() || reports.size() < 2) {
     this->probe_state_.reset();
     this->deprioritized_.clear();
     this->invalidate_efficiency_cache_();
@@ -2574,14 +2578,34 @@ float LoadBalancer::demand_estimate_(const ReportMap &reports, float grid_total)
     auto it = reports.find(cid);
     if (it != reports.end()) total_battery_power += it->second.power;
   }
-  const float raw_abs_target = std::fabs(total_battery_power + grid_total);
+  const float raw_target = total_battery_power + grid_total;
+  const float raw_abs_target = std::fabs(raw_target);
   const float demand_alpha = this->cfg_.efficiency_demand_alpha;
   if (!this->demand_ema_.has_value() || demand_alpha >= 1.0f) {
     this->demand_ema_ = raw_abs_target;
   } else {
     this->demand_ema_ = *this->demand_ema_ + demand_alpha * (raw_abs_target - *this->demand_ema_);
   }
+  this->update_demand_direction_(raw_target, demand_alpha);
   return *this->demand_ema_;
+}
+
+void LoadBalancer::update_demand_direction_(float raw_target, float alpha) {
+  // The signed demand is smoothed like the magnitude, and the direction flips
+  // only once that crosses zero by EFFICIENCY_DIRECTION_DEADBAND_W, so a demand
+  // hovering at 0 W never switches between the charge and discharge
+  // thresholds on meter noise. The first sample sets it.
+  if (!this->demand_signed_ema_.has_value() || alpha >= 1.0f) {
+    const bool first = !this->demand_signed_ema_.has_value();
+    this->demand_signed_ema_ = raw_target;
+    if (first) this->demand_dir_ = raw_target < 0.0f ? -1 : 1;
+  } else {
+    this->demand_signed_ema_ =
+        *this->demand_signed_ema_ + alpha * (raw_target - *this->demand_signed_ema_);
+  }
+  if (*this->demand_signed_ema_ * static_cast<float>(this->demand_dir_) <
+      -EFFICIENCY_DIRECTION_DEADBAND_W)
+    this->demand_dir_ = -this->demand_dir_;
 }
 
 size_t LoadBalancer::active_slots_(float abs_target, size_t n, bool was_limiting,
@@ -2593,17 +2617,19 @@ size_t LoadBalancer::active_slots_(float abs_target, size_t n, bool was_limiting
   // unit active/deprioritized on every meter-noise tick, keeping the fade EMA
   // permanently mid-transition and the pool hunting (issue #469). Shrinking
   // stays immediate, like entering.
-  const auto &cfg = this->cfg_;
+  //
+  // The threshold is the one for the direction the demand runs in
+  // (demand_dir_); a direction whose threshold is 0 keeps every battery active.
+  const float threshold = this->cfg_.efficient_power(this->demand_dir_);
+  if (threshold <= 0.0f) return n;
   const float per_consumer = (n > 0) ? abs_target / n : 0.0f;
-  const float floor = was_limiting
-                          ? cfg.min_efficient_power * EFFICIENCY_HYSTERESIS_FACTOR
-                          : cfg.min_efficient_power;
+  const float floor = was_limiting ? threshold * EFFICIENCY_HYSTERESIS_FACTOR : threshold;
   if (!(per_consumer < floor && n > 1)) return n;
   size_t slots = std::max<size_t>(
-      1, std::min<size_t>(n - 1, static_cast<size_t>(abs_target / cfg.min_efficient_power)));
+      1, std::min<size_t>(n - 1, static_cast<size_t>(abs_target / threshold)));
   if (was_limiting && prev_slots >= 1 && prev_slots < slots) {
     const size_t grown = static_cast<size_t>(
-        abs_target / (cfg.min_efficient_power * EFFICIENCY_HYSTERESIS_FACTOR));
+        abs_target / (threshold * EFFICIENCY_HYSTERESIS_FACTOR));
     slots = std::max(prev_slots, std::min<size_t>(n - 1, grown));
   }
   return slots;

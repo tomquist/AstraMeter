@@ -714,7 +714,15 @@ Choose a value within these limits:
   exported that another battery could cover.
 
 With only Venus batteries, `0` works. Set a value only if you want small loads
-handled by fewer batteries. See
+handled by fewer batteries.
+
+To use a different value while charging than while discharging, set
+`MIN_EFFICIENT_CHARGE_POWER` and/or `MIN_EFFICIENT_DISCHARGE_POWER`; each falls
+back to `MIN_EFFICIENT_POWER` when unset, and `0` turns it off in that direction.
+For example, a pair of Venus E (2500 W charge, 800 W discharge) with
+`MIN_EFFICIENT_DISCHARGE_POWER = 375` and `MIN_EFFICIENT_CHARGE_POWER = 1200`
+starts the second battery discharging at about 900 W of demand, but keeps
+charging on one battery until the surplus reaches about 2880 W. See
 [Battery efficiency optimization](ct002.md#battery-efficiency-optimization).
 
 ### My B2500 stays at 0 W or doesn't cover a small base load.
@@ -795,7 +803,8 @@ fix this:
   simultaneously. For example, a 15 kWh battery paired with a 5 kWh one might
   use weights of `3.0` and `1.0` for a 75:25 split.
 - **Efficiency Window Weight** (also a per-battery slider via MQTT Insights,
-  shown only when `MIN_EFFICIENT_POWER > 0`) controls what fraction of the
+  shown only while efficiency rotation is on, `MIN_EFFICIENT_POWER > 0` or one
+  of its charge / discharge values above 0) controls what fraction of the
   efficiency-rotation active time each battery holds. When demand is low, only
   one battery runs at a time, so a larger battery should hold a proportionally
   bigger slice of the rotation window — e.g. `75` % and `25` % for the same 3:1

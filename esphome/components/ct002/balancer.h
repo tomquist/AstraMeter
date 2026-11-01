@@ -106,6 +106,12 @@ inline constexpr const char *CONTROL_QUALITY_STATES[] = {"idle", "warmup", "stab
                                                          "off_target", "limited"};
 
 inline constexpr double EFFICIENCY_HYSTERESIS_FACTOR = 1.2;
+// How far (W) the smoothed signed demand must cross zero before the efficiency
+// pass takes the other direction's threshold (min_efficient_charge_power /
+// min_efficient_discharge_power), so a demand hovering at 0 W cannot switch
+// thresholds, and with them the active set, on meter noise. Mirrors
+// balancer.py EFFICIENCY_DIRECTION_DEADBAND_W.
+inline constexpr float EFFICIENCY_DIRECTION_DEADBAND_W = 50.0f;
 // Standby reserve (efficiency mode only). A battery outside the active set
 // ("standby": faded fully out, which includes a 0 % efficiency window weight
 // sunk to the tail) stays at 0 W until every battery ahead of it is out of
@@ -244,6 +250,12 @@ struct BalancerConfig {
   // demand step that reacts at full gain. See balancer.py.
   float osc_damp_threshold{300.0f};
   float min_efficient_power{0.0f};
+  // Per-direction override of min_efficient_power (issue #642): the threshold
+  // the efficiency pass uses while the pool charges / discharges. Unset falls
+  // back to min_efficient_power; 0 turns efficiency rotation off in that
+  // direction only. See balancer.py BalancerConfig.efficient_power.
+  std::optional<float> min_efficient_charge_power{};
+  std::optional<float> min_efficient_discharge_power{};
   float probe_min_power{80.0f};
   float efficiency_rotation_interval{900.0f};
   float efficiency_fade_alpha{0.15f};
@@ -300,6 +312,17 @@ struct BalancerConfig {
   float import_trim_w{15.0f};
 
   void clamp();
+  // The efficiency threshold (W) for a demand in *direction* (> 0 discharge,
+  // < 0 charge). Mirrors balancer.py BalancerConfig.efficient_power.
+  float efficient_power(int direction) const {
+    const auto &own = direction < 0 ? min_efficient_charge_power : min_efficient_discharge_power;
+    return own.has_value() ? *own : min_efficient_power;
+  }
+  // Whether efficiency rotation runs in either direction. Mirrors
+  // balancer.py BalancerConfig.efficiency_enabled.
+  bool efficiency_enabled() const {
+    return efficient_power(1) > 0.0f || efficient_power(-1) > 0.0f;
+  }
 };
 
 enum class ConsumerModeKind { AUTO, MANUAL, INACTIVE };
@@ -640,7 +663,7 @@ class LoadBalancer {
   // Absolute net-output target intended pre-pacing (see BalancerConsumerState).
   std::optional<float> get_last_intent(const std::string &consumer_id) const;
 
-  bool efficiency_rotation_enabled() const { return this->cfg_.min_efficient_power > 0.0f; }
+  bool efficiency_rotation_enabled() const { return this->cfg_.efficiency_enabled(); }
   // Per-consumer control state, or absent if the consumer was never steered.
   std::optional<BalancerConsumerSnapshot> snapshot_consumer(const std::string &consumer_id) const;
   // Whole-balancer control state. Pure attribute reads, like the Python
@@ -815,6 +838,9 @@ class LoadBalancer {
   // Low-pass-filtered household demand driving the active-set decision.
   // Mirrors balancer.py _demand_estimate.
   float demand_estimate_(const ReportMap &reports, float grid_total);
+  // Which way the pool's demand runs, for the charge / discharge threshold.
+  // Mirrors balancer.py _update_demand_direction.
+  void update_demand_direction_(float raw_target, float alpha);
   // How many of *n* pooled batteries keep an active slot at *abs_target*.
   // Mirrors balancer.py _active_slots.
   size_t active_slots_(float abs_target, size_t n, bool was_limiting,
@@ -915,6 +941,10 @@ class LoadBalancer {
   // Low-pass-filtered household-demand estimate for the efficiency active-set
   // decision (see compute_efficiency_deprioritized_). Unset until the first poll.
   std::optional<float> demand_ema_{};
+  // Signed twin of demand_ema_ and the direction it settled on (+1 discharge,
+  // -1 charge), which picks the efficiency threshold. Mirrors balancer.py.
+  std::optional<float> demand_signed_ema_{};
+  int demand_dir_{1};
   // Closed-loop quality verdict for HA (see ControlQualityTracker). Measured
   // against the balancer's own settling deadband, so it needs no setting.
   ControlQualityTracker control_quality_;

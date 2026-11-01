@@ -5,6 +5,8 @@ from ipaddress import IPv4Network
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
+
 from astrameter.config.config_loader import (
     ClientFilter,
     apply_signal_wrappers,
@@ -221,3 +223,37 @@ def test_resolve_device_config_shellypro3em_is_one_device() -> None:
     device_types, device_ids = _resolve("shellypro3em")
     assert device_types == ["shellypro3em"]
     assert device_ids == ["shellypro3em-ec4609c439c1"]
+
+
+def test_startup_log_reports_the_efficiency_thresholds_in_effect(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The log shows the threshold rotation runs at, not MIN_EFFICIENT_POWER
+    alone (issue #642): both overrides at 1200 W over a global 0 is 1200 W."""
+    import logging
+
+    from astrameter.config.settings import CtSettings
+    from astrameter.main import _log_ct_settings
+
+    def logged(**kwargs: Any) -> str:
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="astrameter"):
+            _log_ct_settings(CtSettings(**kwargs), "ct002", "dev")
+        return caplog.text
+
+    assert "efficiency optimization (375W)" in logged(min_efficient_power=375)
+    assert "efficiency optimization (1200W)" in logged(
+        min_efficient_power=0,
+        min_efficient_charge_power=1200,
+        min_efficient_discharge_power=1200,
+    )
+    assert "efficiency optimization (charge 1200W, discharge 375W)" in logged(
+        min_efficient_power=375, min_efficient_charge_power=1200
+    )
+    assert "efficiency optimization (charge 1200W, discharge 0W)" in logged(
+        min_efficient_power=0, min_efficient_charge_power=1200
+    )
+    assert "efficiency optimization (charge 375W, discharge 0W)" in logged(
+        min_efficient_power=375, min_efficient_discharge_power=0
+    )
+    assert "efficiency optimization" not in logged(min_efficient_power=0)

@@ -122,6 +122,8 @@ _CT_FIELDS = (
     "active_control",
     "peakshaving_threshold",
     "min_efficient_power",
+    "min_efficient_charge_power",
+    "min_efficient_discharge_power",
     "efficiency_rotation_interval",
     "min_dc_output",
     "min_charge_power",

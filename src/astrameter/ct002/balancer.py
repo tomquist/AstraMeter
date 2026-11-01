@@ -281,6 +281,11 @@ CONTROL_QUALITY_LIMITED_SHARE = 0.5
 CONTROL_QUALITY_SATURATED = 0.6
 
 EFFICIENCY_HYSTERESIS_FACTOR = 1.2
+# How far (W) the smoothed signed demand must cross zero before the efficiency
+# pass takes the other direction's threshold (``MIN_EFFICIENT_CHARGE_POWER`` /
+# ``MIN_EFFICIENT_DISCHARGE_POWER``).  Without it a demand hovering at 0 W
+# would switch thresholds, and with them the active set, on meter noise.
+EFFICIENCY_DIRECTION_DEADBAND_W = 50.0
 # Standby reserve (efficiency mode only).  A battery outside the active set
 # ("standby": faded fully out, which includes a 0 % efficiency window weight
 # sunk to the tail) stays at 0 W until every battery ahead of it is out of
@@ -496,6 +501,12 @@ class BalancerConfig:
     max_correction_per_step: float = 80
     max_target_step: float = 0
     min_efficient_power: float = 0
+    # Per-direction override of ``min_efficient_power`` (issue #642): the
+    # threshold the efficiency pass uses while the pool charges / discharges.
+    # ``None`` falls back to ``min_efficient_power``; ``0`` turns efficiency
+    # rotation off in that direction only (see :meth:`efficient_power`).
+    min_efficient_charge_power: float | None = None
+    min_efficient_discharge_power: float | None = None
     probe_min_power: float = 80
     efficiency_rotation_interval: float = 900
     efficiency_fade_alpha: float = 0.15
@@ -584,6 +595,9 @@ class BalancerConfig:
         _clamp("min_dc_output", 0, float("inf"))
         _clamp("min_charge_power", 0, BATTERY_POWER_MAX)
         _clamp("min_discharge_power", 0, BATTERY_POWER_MAX)
+        for name in ("min_efficient_charge_power", "min_efficient_discharge_power"):
+            if getattr(self, name) is not None:
+                _clamp(name, 0, float("inf"))
         for name in ("min_power_hysteresis", "max_charge_power", "max_discharge_power"):
             if getattr(self, name) is not None:
                 _clamp(name, 0, BATTERY_POWER_MAX)
@@ -596,6 +610,25 @@ class BalancerConfig:
         _clamp("grid_predict_trust", 0.0, 1.0)
         _clamp("concentrate_deadband", 0.0, float("inf"))
         _clamp("import_trim_w", 0.0, float("inf"))
+
+    def efficient_power(self, direction: int) -> float:
+        """The efficiency threshold (W) for a demand in *direction*.
+
+        *direction* is the pool's demand sign: positive to discharge, negative
+        to charge.  An unset per-direction value falls back to
+        ``min_efficient_power``; ``0`` means no efficiency rotation that way.
+        """
+        own = (
+            self.min_efficient_charge_power
+            if direction < 0
+            else self.min_efficient_discharge_power
+        )
+        return self.min_efficient_power if own is None else own
+
+    @property
+    def efficiency_enabled(self) -> bool:
+        """Whether efficiency rotation runs in either direction."""
+        return self.efficient_power(1) > 0 or self.efficient_power(-1) > 0
 
 
 def split_balancer_knobs(knobs: Mapping[str, Any]) -> tuple[BalancerConfig, dict]:
@@ -1253,6 +1286,11 @@ class LoadBalancer:
         # active-set decision (see ``_compute_efficiency_deprioritized``); keeps
         # meter noise from thrashing batteries in and out of the active pool.
         self._demand_ema: float | None = None
+        # Signed twin of ``_demand_ema`` and the direction it settled on, which
+        # picks the charge or discharge efficiency threshold (see
+        # ``_demand_estimate``).  Positive = discharge.
+        self._demand_signed_ema: float | None = None
+        self._demand_dir = 1
         # Closed-loop quality verdict for the status API and HA (see
         # ``ControlQualityTracker``).  Measured against the balancer's own
         # settling deadband, so it needs no setting of its own.
@@ -1262,12 +1300,14 @@ class LoadBalancer:
 
     @property
     def efficiency_rotation_enabled(self) -> bool:
-        """True when efficiency rotation is active (``min_efficient_power > 0``).
+        """True when efficiency rotation is active in either direction.
 
-        When disabled the balancer keeps every battery in the active pool, so
-        there is nothing to rotate and the "Force Rotation" control is a no-op.
+        That is ``min_efficient_power > 0``, or a charge / discharge override
+        above 0 (see :meth:`BalancerConfig.efficient_power`).  When disabled the
+        balancer keeps every battery in the active pool, so there is nothing to
+        rotate and the "Force Rotation" control is a no-op.
         """
-        return self._cfg.min_efficient_power > 0
+        return self._cfg.efficiency_enabled
 
     def _get_consumer(self, consumer_id: str) -> BalancerConsumerState:
         state = self._consumers.get(consumer_id)
@@ -1886,7 +1926,7 @@ class LoadBalancer:
         Deciding again on the same inputs gives the same set.
         """
         cfg = self._cfg
-        if cfg.min_efficient_power <= 0 or len(reports) < 2:
+        if not cfg.efficiency_enabled or len(reports) < 2:
             if self._spilling or self._spill_free_since is not None:
                 self._clear_spill()
             return []
@@ -3434,13 +3474,34 @@ class LoadBalancer:
         total_battery_power = sum(
             _report_of(reports, cid).power for cid in self._priority
         )
-        raw_abs_target = abs(total_battery_power + grid_total)
+        raw_target = total_battery_power + grid_total
+        raw_abs_target = abs(raw_target)
         alpha = self._cfg.efficiency_demand_alpha
         if self._demand_ema is None or alpha >= 1.0:
             self._demand_ema = raw_abs_target
         else:
             self._demand_ema += alpha * (raw_abs_target - self._demand_ema)
+        self._update_demand_direction(raw_target, alpha)
         return self._demand_ema
+
+    def _update_demand_direction(self, raw_target: float, alpha: float) -> None:
+        """Track which way the pool's demand runs, for the threshold choice.
+
+        The signed demand is smoothed like the magnitude, and the direction
+        flips only once that crosses zero by EFFICIENCY_DIRECTION_DEADBAND_W,
+        so a demand hovering at 0 W never switches between the charge and
+        discharge thresholds on meter noise.  The first sample sets it.
+        """
+        if self._demand_signed_ema is None or alpha >= 1.0:
+            first = self._demand_signed_ema is None
+            self._demand_signed_ema = raw_target
+            if first:
+                self._demand_dir = -1 if raw_target < 0 else 1
+        else:
+            self._demand_signed_ema += alpha * (raw_target - self._demand_signed_ema)
+        ema = self._demand_signed_ema
+        if ema * self._demand_dir < -EFFICIENCY_DIRECTION_DEADBAND_W:
+            self._demand_dir = -self._demand_dir
 
     def _active_slots(
         self, abs_target: float, n: int, was_limiting: bool, prev_slots: int
@@ -3452,19 +3513,23 @@ class LoadBalancer:
         while limiting — without that, demand sitting at an exact multiple of
         ``min_efficient_power`` toggles a unit on every meter-noise tick (issue
         #469).  Shrinking stays immediate, like entering.
+
+        The threshold is the one for the direction the demand runs in
+        (``_demand_dir``); a direction whose threshold is 0 keeps every
+        battery active.
         """
-        cfg = self._cfg
+        threshold = self._cfg.efficient_power(self._demand_dir)
+        if threshold <= 0:
+            return n
         per_consumer = abs_target / n
-        floor = cfg.min_efficient_power
+        floor = threshold
         if was_limiting:
             floor = floor * EFFICIENCY_HYSTERESIS_FACTOR
         if not (per_consumer < floor and n > 1):
             return n
-        slots = max(1, min(n - 1, int(abs_target / cfg.min_efficient_power)))
+        slots = max(1, min(n - 1, int(abs_target / threshold)))
         if was_limiting and 1 <= prev_slots < slots:
-            grown = int(
-                abs_target / (cfg.min_efficient_power * EFFICIENCY_HYSTERESIS_FACTOR)
-            )
+            grown = int(abs_target / (threshold * EFFICIENCY_HYSTERESIS_FACTOR))
             slots = max(prev_slots, min(n - 1, grown))
         return slots
 
@@ -3473,7 +3538,7 @@ class LoadBalancer:
     ) -> dict[str, float]:
         """Decide which consumers to deprioritize for efficiency."""
         cfg = self._cfg
-        if cfg.min_efficient_power <= 0 or len(reports) < 2:
+        if not cfg.efficiency_enabled or len(reports) < 2:
             self._probe_state = None
             self._deprioritized = set()
             self._invalidate_efficiency_cache()

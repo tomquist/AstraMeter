@@ -182,6 +182,10 @@ class CtSettings:
     saturation_decay_factor: float = 0.995
     # Efficiency optimization.
     min_efficient_power: int = 0
+    # The same threshold for charging / discharging only (issue #642).
+    # ``None`` = MIN_EFFICIENT_POWER; 0 = no efficiency rotation that way.
+    min_efficient_charge_power: float | None = None
+    min_efficient_discharge_power: float | None = None
     probe_min_power: int = 80
     efficiency_rotation_interval: int = 900
     efficiency_fade_alpha: float = 0.15

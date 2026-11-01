@@ -305,6 +305,8 @@ _UNIT_SUFFIX = {
     "concentrate_deadband": "_w",
     "import_trim_w": "",
     "min_efficient_power": "_w",
+    "min_efficient_charge_power": "_w",
+    "min_efficient_discharge_power": "_w",
     "probe_min_power": "_w",
     "min_dc_output": "_w",
     "min_charge_power": "_w",

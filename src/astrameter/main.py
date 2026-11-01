@@ -179,8 +179,16 @@ def _log_ct_settings(ct: CtSettings, device_type: str, device_id: str) -> None:
         extras.append("fair distribution")
     if ct.saturation_detection:
         extras.append("saturation detection")
-    if ct.min_efficient_power > 0:
-        extras.append(f"efficiency optimization ({ct.min_efficient_power}W)")
+    balancer = _balancer_config(ct)
+    if balancer.efficiency_enabled:
+        charge, discharge = balancer.efficient_power(-1), balancer.efficient_power(1)
+        if charge == discharge:
+            extras.append(f"efficiency optimization ({charge:g}W)")
+        else:
+            extras.append(
+                f"efficiency optimization (charge {charge:g}W, "
+                f"discharge {discharge:g}W)"
+            )
     logger.info("Active control enabled: %s", " + ".join(["load split", *extras]))
 
 

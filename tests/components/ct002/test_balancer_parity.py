@@ -101,6 +101,7 @@ class PyDriver:
         self.min_power = (0.0, 0.0)
         self.max_power: tuple[float | None, float | None] = (None, None)
         self.hysteresis: float | None = None
+        self.efficient_power: tuple[float | None, float | None] = (None, None)
         self.power_overrides: dict[str, tuple[float, ...]] = {}
 
     def feed(self, line: str) -> None:
@@ -143,6 +144,8 @@ class PyDriver:
             cfg = BalancerConfig(
                 fair_distribution=bool(int(fair)),
                 min_efficient_power=float(min_eff),
+                min_efficient_charge_power=self.efficient_power[0],
+                min_efficient_discharge_power=self.efficient_power[1],
                 efficiency_rotation_interval=float(rot),
                 efficiency_saturation_threshold=float(sat_threshold),
                 min_dc_output=min_dc,
@@ -168,6 +171,10 @@ class PyDriver:
             self.min_power = (float(parts[1]), float(parts[2]))
         elif cmd == "hyst":
             self.hysteresis = None if float(parts[1]) < 0 else float(parts[1])
+        elif cmd == "effdir":
+            self.efficient_power = tuple(  # type: ignore[assignment]
+                None if float(v) < 0 else float(v) for v in parts[1:3]
+            )
         elif cmd == "maxpow":
             self.max_power = tuple(  # type: ignore[assignment]
                 None if float(v) < 0 else float(v) for v in parts[1:3]
@@ -374,6 +381,36 @@ def _scenario_efficiency_lifecycle() -> list[str]:
     lines.append("advance 950")
     lines.append(_target("x", pool, grid=200))
     lines.append(_target("y", pool, grid=200))
+    return lines
+
+
+def _scenario_efficiency_per_direction(charge: float, discharge: float) -> list[str]:
+    """Separate charge / discharge efficiency thresholds (issue #642).
+
+    Two batteries charge from a surplus, cross zero into a load, sit on a
+    demand that hovers at 0 W (which must not switch thresholds), and go back
+    to charging.  Both stacks have to pick the same threshold on every poll and
+    keep the same active set across the crossing.
+    """
+    lines = [f"effdir {charge} {discharge}", _CFG_EFFICIENCY, "clock 5000"]
+
+    def tick(a: int, b: int, grid: float) -> None:
+        pool = [_report("x", "A", a, "VNSE3"), _report("y", "A", b, "VNSE3")]
+        for cid in ("x", "y"):
+            lines.append(_target(cid, pool, grid=grid))
+            lines.append(f"last {cid}")
+        lines.append("advance 1")
+
+    for _ in range(15):
+        tick(-400, 0, -400)
+    for _ in range(15):
+        tick(-800, 0, 0)
+    for _ in range(25):
+        tick(0, 0, 500)
+    for i in range(20):
+        tick(0, 0, 40 if i % 2 else -40)
+    for _ in range(25):
+        tick(0, 0, -900)
     return lines
 
 
@@ -749,6 +786,20 @@ def test_parity_min_power(harness: Path) -> None:
 def test_parity_min_power_hysteresis(harness: Path) -> None:
     lines = _scenario_min_power(hysteresis=40.0)
     _compare("min_power_hysteresis", lines, _run_cpp(harness, lines), _run_py(lines))
+
+
+@pytest.mark.parametrize(
+    ("charge", "discharge"),
+    [(1200.0, 375.0), (600.0, 0.0), (0.0, -1.0)],
+    ids=["charge_above_discharge", "charge_only", "discharge_only"],
+)
+def test_parity_efficiency_per_direction(
+    harness: Path, charge: float, discharge: float
+) -> None:
+    lines = _scenario_efficiency_per_direction(charge, discharge)
+    _compare(
+        "efficiency_per_direction", lines, _run_cpp(harness, lines), _run_py(lines)
+    )
 
 
 def test_parity_max_power(harness: Path) -> None:

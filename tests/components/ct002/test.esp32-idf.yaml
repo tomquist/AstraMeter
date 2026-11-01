@@ -70,7 +70,9 @@ ct002:
     balance_gain: 0.2
     balance_deadband: 25
     min_efficient_power: 0
-    # The power limits, so the optional keys' codegen (inserted in the
+    min_efficient_charge_power: 1200
+    min_efficient_discharge_power: 375
+    # The per-direction efficiency thresholds and the power limits, so the optional keys' codegen (inserted in the
     # struct's declaration order) is compiled.
     min_discharge_power: 30
     min_power_hysteresis: 20
