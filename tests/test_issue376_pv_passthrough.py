@@ -68,6 +68,8 @@ class _Issue376Harness:
 
         ct_mac = "112233445566"
         self.venus_d = BatterySimulator(
+            meter_dev_type="VNSD-0",
+            surplus_feed_in=True,
             mac="02B250000001",
             phase="A",
             ct_mac=ct_mac,

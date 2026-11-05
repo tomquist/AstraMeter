@@ -346,7 +346,7 @@ class BatterySimulator:
 
     def _apply_ct_derived_target(self, new_target: float) -> None:
         """Record CT request immediately; apply to physics after *power_update_delay_ticks*."""
-        if self._detector is not None and self._is_venus_d():
+        if self._is_venus_d():
             new_target = self._venus_d_output(new_target)
         self._requested_target = new_target
         if self.power_update_delay_ticks <= 0:
@@ -374,12 +374,6 @@ class BatterySimulator:
         if abs(target) < self.min_power_threshold:
             target = 0.0
 
-        # SOC saturation
-        if self._soc >= 1.0 and target < 0:
-            target = 0.0
-        if self._soc <= 0.0 and target > 0:
-            target = 0.0
-
         # Startup delay: when resuming from idle the real inverter needs
         # a few seconds before it begins ramping.  During this window the
         # battery stays at ~0 W, which is the behaviour that previously
@@ -390,7 +384,7 @@ class BatterySimulator:
             if idle and want_power:
                 self._startup_elapsed += dt
                 if self._startup_elapsed < self.startup_delay:
-                    self._apply_dc_passthrough()
+                    self._limit_power(dt)
                     return  # stay at current (near-zero) power
             else:
                 self._startup_elapsed = 0.0
@@ -402,33 +396,41 @@ class BatterySimulator:
             diff = max_step if diff > 0 else -max_step
         self._current_power += diff
 
-        # Clamp to limits
+        self._limit_power(dt)
+
+    def _limit_power(self, dt: float) -> None:
+        """Constrain actual output, including energy available in this step.
+
+        DC input is available PV, not a compulsory flow through the inverter.
+        A full pack curtails whatever neither its cells nor its output accepts.
+        PV gets priority over AC charging; at zero SOC it can still supply the
+        output directly. Energy bounds bypass slew, as a BMS cutoff does.
+        """
+        discharge = float(self.max_discharge_power)
+        charge = float(self.max_charge_power)
+        if dt > 0 and self.capacity_wh > 0:
+            watts_per_soc = self.capacity_wh * 3600.0 / dt
+            discharge = min(discharge, self._dc_input_power + self._soc * watts_per_soc)
+            charge = min(
+                charge,
+                max(0.0, (1.0 - self._soc) * watts_per_soc - self._dc_input_power),
+            )
         self._current_power = max(
-            -self.max_charge_power,
-            min(self.max_discharge_power, self._current_power),
+            -charge,
+            min(discharge, self._current_power),
         )
-
-        # When SoC is saturated and DC input is present, the inverter
-        # passes the unabsorbed PV through to AC even if the AC target
-        # asks for charging.  Mirrors Marstek Venus D behaviour.
-        self._apply_dc_passthrough()
-
-    def _apply_dc_passthrough(self) -> None:
-        if self._soc < 1.0 or self._dc_input_power <= 0:
-            return
-        # Push at least the DC input through to AC as positive output.
-        self._current_power = max(self._current_power, self._dc_input_power)
 
     def _update_soc(self, dt: float) -> None:
         if self.capacity_wh <= 0:
             return
-        # AC energy first (positive current_power drains, negative charges)
-        energy_wh = self._current_power * (dt / 3600.0)
-        self._soc -= energy_wh / self.capacity_wh
-        # DC input charges the cells in parallel (when not already full).
-        if self._dc_input_power > 0:
-            dc_energy_wh = self._dc_input_power * (dt / 3600.0)
-            self._soc += dc_energy_wh / self.capacity_wh
+        if dt <= 0:
+            return
+        # Accept only PV that can supply the output or fit in the cells.
+        room_w = (1.0 - self._soc) * self.capacity_wh * 3600.0 / dt
+        accepted_dc = min(self._dc_input_power, max(0.0, room_w + self._current_power))
+        self._soc += (
+            (accepted_dc - self._current_power) * dt / 3600.0 / self.capacity_wh
+        )
         self._soc = max(0.0, min(1.0, self._soc))
 
     # -- protocol ----------------------------------------------------------
@@ -720,23 +722,13 @@ class BatterySimulator:
         """
         assert self._b2500 is not None
         envelope = self.max_discharge_power
-        # At full SoC the PV passes straight through to the output and cannot be
-        # curtailed below the DC input (the pack is full, the PV has nowhere else
-        # to go). The steering can't drive the output under that floor, so don't
-        # let it try — otherwise it fights the passthrough override and the
-        # output oscillates instead of settling at the PV level.
-        floor = (
-            round(self._dc_input_power)
-            if self._soc >= 1.0 and self._dc_input_power > 0
-            else 0
-        )
         out = self._b2500.step(
             grid_reading,
             max(0, round(self._current_power)),
             self.poll_interval,
             max_power=envelope,
         )
-        self._apply_ct_derived_target(float(max(out, floor)))
+        self._apply_ct_derived_target(float(out))
 
     # -- main loop ---------------------------------------------------------
 

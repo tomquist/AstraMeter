@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Fixed** battery simulations producing power beyond their output limits or remaining energy, and full batteries exporting all available solar power even when surplus feed-in was disabled.
+
 
 ## 2.5.0
 
