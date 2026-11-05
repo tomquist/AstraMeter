@@ -347,10 +347,10 @@ class BatterySimulator:
 
     def _apply_ct_derived_target(self, new_target: float) -> None:
         """Record CT request immediately; apply to physics after *power_update_delay_ticks*."""
-        if not self._has_ac_input:
-            new_target = max(0.0, new_target)
         if self._detector is not None and self._is_venus_d():
             new_target = self._venus_d_output(new_target)
+        if not self._has_ac_input:
+            new_target = max(0.0, new_target)
         self._requested_target = new_target
         if self.power_update_delay_ticks <= 0:
             self._target_power = new_target
@@ -410,7 +410,7 @@ class BatterySimulator:
 
         # Clamp to limits
         self._current_power = max(
-            -self.max_charge_power if self._has_ac_input else 0.0,
+            -self.max_charge_power,
             min(self.max_discharge_power, self._current_power),
         )
 
