@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Fixed** battery simulations producing power beyond their output limits or remaining energy, and full batteries exporting all available solar power even when surplus feed-in was disabled.
+- **Fixed** battery simulations producing power beyond their output limits or remaining energy, and full batteries exporting all available solar power even when surplus feed-in was disabled. ([#764](https://github.com/tomquist/astrameter/pull/764))
 
 
 ## 2.5.0
