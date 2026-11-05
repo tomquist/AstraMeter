@@ -191,6 +191,7 @@ class BatterySimulator:
         # two DC output channels, each its own regulator running every cycle, so
         # the combined output slews at twice a single channel's rate.
         caps = device_capabilities(self.meter_dev_type)
+        self._has_ac_input = caps.has_ac_input
         self._is_dc_output = (
             caps.has_dc_input
             and not caps.has_builtin_inverter
@@ -246,11 +247,11 @@ class BatterySimulator:
         # running when a disturbance arrives. The relevant steering controller's
         # setpoint is seeded so its ramp law holds the seeded output instead of
         # winding back to zero on the first cycle.
-        # A DC-coupled B2500 has no AC input and cannot charge, so a negative
+        # A B2500 or Jupiter has no AC input, so a negative
         # seed would start it in a state it can never physically be in and
         # would simulate charging until the first CT reply displaced it. Clamp
         # the seed itself, not just the controller's command.
-        if initial_power and self._b2500 is not None:
+        if initial_power and not self._has_ac_input:
             initial_power = max(0, initial_power)
         if initial_power:
             self._current_power = float(initial_power)
@@ -346,6 +347,8 @@ class BatterySimulator:
 
     def _apply_ct_derived_target(self, new_target: float) -> None:
         """Record CT request immediately; apply to physics after *power_update_delay_ticks*."""
+        if not self._has_ac_input:
+            new_target = max(0.0, new_target)
         if self._detector is not None and self._is_venus_d():
             new_target = self._venus_d_output(new_target)
         self._requested_target = new_target
@@ -370,6 +373,9 @@ class BatterySimulator:
 
     def _update_power(self, dt: float) -> None:
         target = self._target_power
+        if not self._has_ac_input:
+            self._current_power = max(0.0, self._current_power)
+            target = max(0.0, target)
 
         if abs(target) < self.min_power_threshold:
             target = 0.0
@@ -404,7 +410,7 @@ class BatterySimulator:
 
         # Clamp to limits
         self._current_power = max(
-            -self.max_charge_power,
+            -self.max_charge_power if self._has_ac_input else 0.0,
             min(self.max_discharge_power, self._current_power),
         )
 
@@ -702,7 +708,7 @@ class BatterySimulator:
         # a runtime change to either cap takes effect.
         setpoint = self._steering.step(
             grid_reading,
-            float(self.max_charge_power),
+            float(self.max_charge_power) if self._has_ac_input else 0.0,
             -float(self.max_discharge_power),
             device_count=phase_count,
             out=self._current_power,
