@@ -904,6 +904,8 @@ std::vector<std::string> CT002Component::build_response_fields_(
   while (!reported_phase.empty() && std::isspace(static_cast<unsigned char>(reported_phase.back())))
     reported_phase.pop_back();
   for (auto &c : reported_phase) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  const bool in_inspection = reported_phase != "A" && reported_phase != "B" &&
+                            reported_phase != "C" && reported_phase != "D";
   const float phase_power[3] = {phase_a, phase_b, phase_c};
   for (size_t i = 0; i < 3; ++i) {
     const size_t bucket = BUCKET_A + i;
@@ -917,7 +919,8 @@ std::vector<std::string> CT002Component::build_response_fields_(
       // The issue #455 relay-count fix applies to the relay branch only.
       // Venus divides by all count buckets in total-power mode. Count only
       // this requester's bucket for its individual target.
-      if (reported_phase == std::string(1, static_cast<char>('A' + i)) &&
+      // Inspection replies still carry raw readings and aggregate metadata.
+      if ((in_inspection || reported_phase == std::string(1, static_cast<char>('A' + i))) &&
           (phase_reports.active[bucket] || phase_power[i] != 0.0f)) {
         fields[8 + i] = "1";
       }
@@ -943,7 +946,8 @@ std::vector<std::string> CT002Component::build_response_fields_(
   // requester: a per-phase target also sums into that field, so an unscoped
   // check would spuriously set the ABC count on phase-A/B/C responses.
   if (this->active_control_) {
-    if (reported_phase == "D" && (phase_reports.active[BUCKET_ABC] || total != 0.0f)) {
+    if ((in_inspection && phase_reports.active[BUCKET_ABC]) ||
+        (reported_phase == "D" && (phase_reports.active[BUCKET_ABC] || total != 0.0f))) {
       fields[11] = "1";
     }
   } else {

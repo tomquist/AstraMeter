@@ -1400,7 +1400,11 @@ class CT002:
                 # relay branch below only; don't generalize it here.
                 # Venus divides total_power by every count bucket. Its
                 # individual target must count only this requester's bucket.
-                if request.phase == phase and (pv.active or phase_power[idx] != 0):
+                # Inspection still returns raw grid values and keeps its
+                # aggregate metadata; it has no individual target to divide.
+                if (request.in_inspection_mode or request.phase == phase) and (
+                    pv.active or phase_power[idx] != 0
+                ):
                     response_fields[8 + idx] = "1"
             else:
                 # Relay mode forwards the per-phase aggregate; report the real
@@ -1426,7 +1430,9 @@ class CT002:
         # phase-A/B/C responses (where the battery ignores it anyway).
         abc = phase_values["ABC"]
         if self.active_control:
-            if request.phase == "D" and (abc.active or measured_total_power != 0):
+            if (request.in_inspection_mode and abc.active) or (
+                request.phase == "D" and (abc.active or measured_total_power != 0)
+            ):
                 response_fields[11] = "1"
         else:
             response_fields[11] = str(abc.count)

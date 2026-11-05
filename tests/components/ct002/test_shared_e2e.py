@@ -686,6 +686,27 @@ def test_individual_targets_count_only_the_requester_bucket(
 
 
 @pytest.mark.timeout(30, func_only=True)
+def test_inspection_keeps_aggregate_count_metadata(backend: Backend) -> None:
+    backend.set_clock(15700)
+    backend.set_active_control(True)
+    backend.set_grid(600, 600, 600)
+    for mac, phase in (
+        ("A20000000001", "A"),
+        ("A20000000002", "B"),
+        ("A20000000003", "D"),
+    ):
+        assert backend.poll(mac, phase, 200) is not None
+        backend.advance_clock(1)
+    reply = backend.poll("A20000000004", "0", 0)
+    assert reply is not None
+    # Phase 0 gets raw grid values, not an individual target. Keep the
+    # established count metadata instead of applying the per-target mask.
+    assert int(reply[8]) == 1
+    assert int(reply[9]) == 1
+    assert int(reply[11]) == 1
+
+
+@pytest.mark.timeout(30, func_only=True)
 def test_inspection_reporter_lands_in_x_bucket(backend: Backend) -> None:
     """An inspection ('0') reporter populates the x bucket and is excluded
     from phase A's count/aggregate (issue #460)."""
