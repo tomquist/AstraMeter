@@ -898,6 +898,12 @@ std::vector<std::string> CT002Component::build_response_fields_(
   fields.push_back("0");  // ABC_dchrg_power
 
   const auto phase_reports = this->collect_reports_by_phase_();
+  std::string reported_phase = request_fields.size() > 4 ? request_fields[4] : "";
+  while (!reported_phase.empty() && std::isspace(static_cast<unsigned char>(reported_phase.front())))
+    reported_phase.erase(reported_phase.begin());
+  while (!reported_phase.empty() && std::isspace(static_cast<unsigned char>(reported_phase.back())))
+    reported_phase.pop_back();
+  for (auto &c : reported_phase) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
   const float phase_power[3] = {phase_a, phase_b, phase_c};
   for (size_t i = 0; i < 3; ++i) {
     const size_t bucket = BUCKET_A + i;
@@ -909,7 +915,10 @@ std::vector<std::string> CT002Component::build_response_fields_(
       // our value is already this battery's individual target, so a real
       // count N would make every battery under-respond by a factor of N.
       // The issue #455 relay-count fix applies to the relay branch only.
-      if (phase_reports.active[bucket] || phase_power[i] != 0.0f) {
+      // Venus divides by all count buckets in total-power mode. Count only
+      // this requester's bucket for its individual target.
+      if (reported_phase == std::string(1, static_cast<char>('A' + i)) &&
+          (phase_reports.active[bucket] || phase_power[i] != 0.0f)) {
         fields[8 + i] = "1";
       }
     } else {
@@ -933,14 +942,8 @@ std::vector<std::string> CT002Component::build_response_fields_(
   // count for the 1/N share. The `total` guard is scoped to a phase-"D"
   // requester: a per-phase target also sums into that field, so an unscoped
   // check would spuriously set the ABC count on phase-A/B/C responses.
-  std::string reported_phase = request_fields.size() > 4 ? request_fields[4] : "";
-  while (!reported_phase.empty() && std::isspace(static_cast<unsigned char>(reported_phase.front())))
-    reported_phase.erase(reported_phase.begin());
-  while (!reported_phase.empty() && std::isspace(static_cast<unsigned char>(reported_phase.back())))
-    reported_phase.pop_back();
-  for (auto &c : reported_phase) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
   if (this->active_control_) {
-    if (phase_reports.active[BUCKET_ABC] || (reported_phase == "D" && total != 0.0f)) {
+    if (reported_phase == "D" && (phase_reports.active[BUCKET_ABC] || total != 0.0f)) {
       fields[11] = "1";
     }
   } else {

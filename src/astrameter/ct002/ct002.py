@@ -1398,7 +1398,9 @@ class CT002:
                 # a real count N would make every battery under-respond by a
                 # factor of N.  The issue #455 relay-count fix applies to the
                 # relay branch below only; don't generalize it here.
-                if pv.active or phase_power[idx] != 0:
+                # Venus divides total_power by every count bucket. Its
+                # individual target must count only this requester's bucket.
+                if request.phase == phase and (pv.active or phase_power[idx] != 0):
                     response_fields[8 + idx] = "1"
             else:
                 # Relay mode forwards the per-phase aggregate; report the real
@@ -1424,7 +1426,7 @@ class CT002:
         # phase-A/B/C responses (where the battery ignores it anyway).
         abc = phase_values["ABC"]
         if self.active_control:
-            if abc.active or (request.phase == "D" and measured_total_power != 0):
+            if request.phase == "D" and (abc.active or measured_total_power != 0):
                 response_fields[11] = "1"
         else:
             response_fields[11] = str(abc.count)

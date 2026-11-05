@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Fixed** batteries sharing demand across phases receiving the wrong power share; simulations now count all relevant batteries, and individual targets no longer count batteries on other phases.
+
 
 ## 2.5.0
 

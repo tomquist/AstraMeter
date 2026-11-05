@@ -661,6 +661,31 @@ def test_relay_buckets_carry_reported_power(backend: Backend) -> None:
 
 
 @pytest.mark.timeout(30, func_only=True)
+@pytest.mark.parametrize("phase,index", [("A", 8), ("B", 9), ("C", 10), ("D", 11)])
+def test_individual_targets_count_only_the_requester_bucket(
+    backend: Backend,
+    phase: str,
+    index: int,
+) -> None:
+    backend.set_clock(15500)
+    backend.set_active_control(True)
+    backend.set_grid(600, 600, 600)
+    for mac, reported in (
+        ("A10000000001", "A"),
+        ("A10000000002", "B"),
+        ("A10000000003", "C"),
+        ("A10000000004", "D"),
+    ):
+        assert backend.poll(mac, reported, 200) is not None
+        backend.advance_clock(1)
+    reply = backend.poll("A10000000005", phase, 200)
+    assert reply is not None
+    counts = [int(c) for c in reply[8:12]]
+    assert counts[index - 8] == 1
+    assert sum(counts) == 1  # total-power firmware must not divide this target
+
+
+@pytest.mark.timeout(30, func_only=True)
 def test_inspection_reporter_lands_in_x_bucket(backend: Backend) -> None:
     """An inspection ('0') reporter populates the x bucket and is excluded
     from phase A's count/aggregate (issue #460)."""

@@ -149,7 +149,7 @@ def test_ct002_relays_sum_of_charge_instructions_by_phase() -> None:
     assert response_for_a[15] == "-180"  # A_chrg_power
     assert response_for_a[16] == "-240"  # B_chrg_power
     assert response_for_a[21] == "0"  # B_dchrg_power
-    assert response_for_a[8] == "1"  # A_chrg_nb
+    assert response_for_a[8] == "0"  # Other phases do not divide B's target
     assert response_for_a[9] == "1"  # B_chrg_nb
 
     response_for_b = device._build_response_fields(
@@ -278,7 +278,7 @@ def test_ct002_splits_positive_instructions_into_dchrg_fields() -> None:
     assert response[16] == "0"  # B_chrg_power
     assert response[20] == "500"  # A_dchrg_power
     assert response[21] == "800"  # B_dchrg_power
-    assert response[8] == "1"  # A_chrg_nb flag still marks active phase contribution
+    assert response[8] == "0"  # Only B counts toward this individual target
     assert response[9] == "1"  # B_chrg_nb
 
 
