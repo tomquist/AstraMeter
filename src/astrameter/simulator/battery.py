@@ -713,6 +713,12 @@ class BatterySimulator:
             device_count=phase_count,
             out=self._current_power,
         )
+        if not self._has_ac_input:
+            # Do not leave a charging integrator wound up behind the plant's
+            # zero-AC-input limit. Its window pullback would otherwise command
+            # a discharge pulse on the next poll, even under sustained export.
+            setpoint = min(0.0, setpoint)
+            self._steering.setpoint = setpoint
         # Controller: +charge → simulator: +discharge.
         self._apply_ct_derived_target(-setpoint)
 

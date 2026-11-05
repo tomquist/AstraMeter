@@ -15,9 +15,9 @@ def test_dc_only_devices_never_charge_from_ac(device: str) -> None:
     for _ in range(20):
         b._handle_ct_response(_response_fields(phase_targets=(-500, 0, 0)))
         b._advance(1)
-        assert b.target_power >= 0
-        assert b.current_power >= 0
-        assert b.soc <= initial_soc
+        assert b.target_power == 0
+        assert b.current_power == 0
+        assert b.soc == initial_soc
     # The plant and delayed targets also enforce the capability independently
     # of which controller or caller requests charging.
     b._apply_ct_derived_target(-800)
