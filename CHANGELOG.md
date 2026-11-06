@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Fixed** Jupiter battery simulations absorbing grid surplus through an unsupported AC charging path; they now charge only from solar input and continue to discharge normally. ([#765](https://github.com/tomquist/astrameter/pull/765))
+
 
 ## 2.5.0
 
