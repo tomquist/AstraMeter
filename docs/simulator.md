@@ -280,8 +280,11 @@ network:
   Venus D (`VNSD-0`) also applies its PV rules to every power
   command: charging gives way to the DC input, and with `surplus_feed_in=True`
   a full battery never outputs less than the DC input plus 10 W, within its
-  configured output limit.
+  configured output limit. This policy follows PV and SOC changes even when
+  the meter is unavailable.
 
 DC input denotes available solar power. The plant curtails any input that
 neither the cells nor the commanded output can accept. Each step limits charge
 and discharge energy to what the cells and available solar can store or supply.
+Venus D PV charging also respects the cell charge limit; PV supplying the
+output directly does not count toward that limit.

@@ -126,6 +126,9 @@ class BatterySimulator:
         self._current_power: float = 0.0
         self._soc: float = max(0.0, min(1.0, initial_soc))
         self._target_power: float = 0.0
+        # Keep the underlying command so live PV policy cannot latch an old
+        # feed-in floor or a temporary PV charge restriction.
+        self._plant_command: float = 0.0
         self._requested_target: float = 0.0
         self._request_count: int = 0
         self._last_update: float = time.monotonic()
@@ -255,6 +258,7 @@ class BatterySimulator:
         if initial_power:
             self._current_power = float(initial_power)
             self._target_power = float(initial_power)
+            self._plant_command = float(initial_power)
             self._requested_target = float(initial_power)
             if self._venus_steering is not None:
                 self._venus_steering.setpoint = round(initial_power)
@@ -346,14 +350,16 @@ class BatterySimulator:
 
     def _apply_ct_derived_target(self, new_target: float) -> None:
         """Record CT request immediately; apply to physics after *power_update_delay_ticks*."""
+        command = new_target
         if self._is_venus_d():
-            new_target = self._venus_d_output(new_target)
+            new_target = self._venus_d_output(command)
         self._requested_target = new_target
         if self.power_update_delay_ticks <= 0:
+            self._plant_command = command
             self._target_power = new_target
             return
         apply_at = self._step_index + self.power_update_delay_ticks
-        self._pending_power_targets.append((apply_at, new_target))
+        self._pending_power_targets.append((apply_at, command))
 
     def _drain_pending_power_targets(self) -> None:
         if self.power_update_delay_ticks <= 0:
@@ -361,7 +367,10 @@ class BatterySimulator:
         remaining: list[tuple[int, float]] = []
         for apply_at, target in self._pending_power_targets:
             if apply_at <= self._step_index:
-                self._target_power = target
+                self._plant_command = target
+                self._target_power = (
+                    self._venus_d_output(target) if self._is_venus_d() else target
+                )
             else:
                 remaining.append((apply_at, target))
         self._pending_power_targets = remaining
@@ -369,6 +378,8 @@ class BatterySimulator:
     # -- physics -----------------------------------------------------------
 
     def _update_power(self, dt: float) -> None:
+        if self._is_venus_d():
+            self._target_power = self._venus_d_output(self._plant_command)
         target = self._target_power
 
         if abs(target) < self.min_power_threshold:
@@ -408,8 +419,10 @@ class BatterySimulator:
         """
         discharge = float(self.max_discharge_power)
         charge = float(self.max_charge_power)
-        if dt > 0 and self.capacity_wh > 0:
-            watts_per_soc = self.capacity_wh * 3600.0 / dt
+        if self._is_venus_d():
+            charge = min(charge, float(VENUS_D_CHARGE_CAP_W))
+        if dt > 0:
+            watts_per_soc = max(0.0, self.capacity_wh) * 3600.0 / dt
             discharge = min(discharge, self._dc_input_power + self._soc * watts_per_soc)
             charge = min(
                 charge,
@@ -421,12 +434,15 @@ class BatterySimulator:
         )
 
     def _update_soc(self, dt: float) -> None:
+        """Store accepted PV and AC energy within cell and capacity limits."""
         if self.capacity_wh <= 0:
             return
         if dt <= 0:
             return
         # Accept only PV that can supply the output or fit in the cells.
         room_w = (1.0 - self._soc) * self.capacity_wh * 3600.0 / dt
+        if self._is_venus_d():
+            room_w = min(room_w, self.max_charge_power, VENUS_D_CHARGE_CAP_W)
         accepted_dc = min(self._dc_input_power, max(0.0, room_w + self._current_power))
         self._soc += (
             (accepted_dc - self._current_power) * dt / 3600.0 / self.capacity_wh
