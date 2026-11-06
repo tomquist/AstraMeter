@@ -671,15 +671,30 @@ class BatterySimulator:
                 return 0
 
         if grid_reading is None:
-            grid_reading = field(4) + field(5) + field(6)
+            if self._b2500 is not None:
+                grid_reading = field(4) + field(5) + field(6)
+            elif self.sum_all_phases:
+                # Preserve the simplified mode's integer phase sum (also
+                # used by short deterministic replies). Firmware reply mode
+                # selects its explicit total field in _steer_firmware.
+                grid_reading = field(4) + field(5) + field(6)
+            else:
+                grid_reading = field(PHASE_FIELD_INDEX[self.phase])
 
         if self._b2500 is not None:
             self._steer_b2500_output(grid_reading)
             return
 
-        # *_chrg_nb for this battery's phase (fields 9/10/11 → indices 8/9/10).
+        # Select the count for the same bucket as the reading. The firmware's
+        # factory setting follows the total, even when phase discovery is
+        # bypassed; counting only our wired phase makes every phase chase the
+        # full residual independently.
         if phase_count is None:
-            phase_count = field(8 + "ABC".index(self.phase))
+            phase_count = (
+                sum(field(i) for i in range(8, 12))
+                if self.sum_all_phases
+                else field(8 + "ABC".index(self.phase))
+            )
 
         if self._venus_steering is not None:
             # Venus A / D / E: integer integrator behind its own gate, positive

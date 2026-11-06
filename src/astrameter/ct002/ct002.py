@@ -1385,7 +1385,7 @@ class CT002:
         phase_power = [phase_a, phase_b, phase_c]
         for phase, idx in (("A", 0), ("B", 1), ("C", 2)):
             pv = phase_values[phase]
-            if self.active_control:
+            if self.active_control and not request.in_inspection_mode:
                 # Active control distributes a per-consumer target, so each
                 # battery should apply it as-is (not divide): report a count of
                 # 1 when the phase is active, 0 otherwise.
@@ -1397,12 +1397,14 @@ class CT002:
                 # phase-power field is this battery's *individual* target — so
                 # a real count N would make every battery under-respond by a
                 # factor of N.  The issue #455 relay-count fix applies to the
-                # relay branch below only; don't generalize it here.
-                if pv.active or phase_power[idx] != 0:
+                # raw-reading branch below; don't generalize it here.
+                # Venus divides total_power by every count bucket. Its
+                # individual target must count only this requester's bucket.
+                if request.phase == phase and (pv.active or phase_power[idx] != 0):
                     response_fields[8 + idx] = "1"
             else:
-                # Relay mode forwards the per-phase aggregate; report the real
-                # battery count so each battery takes its 1/N share.
+                # Relay and inspection replies carry raw readings and real
+                # battery counts; no individual target has been assigned.
                 response_fields[8 + idx] = str(pv.count)
             response_fields[15 + idx] = str(pv.chrg_power)
             response_fields[20 + idx] = str(pv.dchrg_power)
@@ -1423,8 +1425,8 @@ class CT002:
         # that field, so an unscoped check would spuriously set the ABC count on
         # phase-A/B/C responses (where the battery ignores it anyway).
         abc = phase_values["ABC"]
-        if self.active_control:
-            if abc.active or (request.phase == "D" and measured_total_power != 0):
+        if self.active_control and not request.in_inspection_mode:
+            if request.phase == "D" and (abc.active or measured_total_power != 0):
                 response_fields[11] = "1"
         else:
             response_fields[11] = str(abc.count)
