@@ -21,6 +21,24 @@ def _run(steps: list[tuple[float, float]], **kwargs: Any) -> list[int]:
     return [c.step(g, 2500.0, -2500.0, out=out) for g, out in steps]
 
 
+@pytest.mark.parametrize("code", [0, 2, 7, 8, 9, 10, 11, 13])
+def test_non_ct_meter_types_bypass_only_the_spike_stage(code: int) -> None:
+    # VNSE3-0 v151 0x0802893c, verified by firmware execution: first 500 W sample
+    # passes for SMR/TPM2, but not HME-4 (3) or HME-3 (4).
+    c = VenusIntegerSteeringController()
+    assert c.step(500, 800, -800, out=0, meter_code=code) == 495
+    assert not c.spike_pending
+    assert c.prev_g == 0  # bypassed spike stage does not update its baselines
+    assert c.step(5, 800, -800, out=0, meter_code=code) == 495
+
+
+@pytest.mark.parametrize("code", [1, 3, 4, 5, 6])
+def test_ct_meter_types_keep_the_one_shot_spike_filter(code: int) -> None:
+    c = VenusIntegerSteeringController()
+    assert c.step(500, 800, -800, out=0, meter_code=code) == 0
+    assert c.step(500, 800, -800, out=0, meter_code=code) == 495
+
+
 # ---------------------------------------------------------------------------
 # The bare law
 # ---------------------------------------------------------------------------

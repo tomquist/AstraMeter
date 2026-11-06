@@ -270,6 +270,23 @@ class BatterySimulator:
     # -- public read-only properties ---------------------------------------
 
     @property
+    def ct_dev_type(self) -> str:
+        """The configured meter type; runtime changes use constructor validation."""
+        return self._ct_dev_type
+
+    @ct_dev_type.setter
+    def ct_dev_type(self, value: str) -> None:
+        code = meter_code_for(self.meter_dev_type, value)
+        if self.meter_dev_type.upper().startswith("VNS") and code == 10:
+            raise ValueError(
+                "Venus SMR-2 steering (meter type 10) is not modelled; "
+                "use a supported meter type such as HME-4"
+            )
+        self._ct_dev_type = value
+        if not self._is_hmg50_type():
+            self._meter_code = code
+
+    @property
     def current_power(self) -> float:
         return self._current_power
 
@@ -693,6 +710,11 @@ class BatterySimulator:
                 -float(self.max_charge_power),
                 out=self._current_power,
                 device_count=phase_count,
+                meter_code=(
+                    self._meter_code
+                    if self._detector is not None
+                    else meter_code_for(self.meter_dev_type, self.ct_dev_type)
+                ),
             )
             self._apply_ct_derived_target(float(venus_setpoint))
             return
