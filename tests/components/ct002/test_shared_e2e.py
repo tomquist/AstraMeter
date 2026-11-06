@@ -686,24 +686,21 @@ def test_individual_targets_count_only_the_requester_bucket(
 
 
 @pytest.mark.timeout(30, func_only=True)
-def test_inspection_keeps_aggregate_count_metadata(backend: Backend) -> None:
+@pytest.mark.parametrize("active_control", [False, True])
+def test_inspection_keeps_real_counts(backend: Backend, active_control: bool) -> None:
     backend.set_clock(15700)
-    backend.set_active_control(True)
+    backend.set_active_control(active_control)
     backend.set_grid(600, 600, 600)
-    for mac, phase in (
-        ("A20000000001", "A"),
-        ("A20000000002", "B"),
-        ("A20000000003", "D"),
-    ):
-        assert backend.poll(mac, phase, 200) is not None
+    for index, phase in enumerate(("A", "A", "B", "D", "D", "D"), start=1):
+        assert backend.poll(f"A200000000{index:02X}", phase, 200) is not None
         backend.advance_clock(1)
-    reply = backend.poll("A20000000004", "0", 0)
+    reply = backend.poll("A200000000FF", "0", 0)
     assert reply is not None
-    # Phase 0 gets raw grid values, not an individual target. Keep the
-    # established count metadata instead of applying the per-target mask.
-    assert int(reply[8]) == 1
-    assert int(reply[9]) == 1
-    assert int(reply[11]) == 1
+    # Inspection gets raw grid values and actual per-bucket populations,
+    # including zero for a loaded phase with no batteries. The inspecting
+    # battery belongs to x, which has no count field in the reply.
+    assert [int(v) for v in reply[4:8]] == [600, 600, 600, 1800]
+    assert [int(v) for v in reply[8:12]] == [2, 1, 0, 3]
 
 
 @pytest.mark.timeout(30, func_only=True)
