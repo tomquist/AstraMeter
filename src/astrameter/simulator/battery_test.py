@@ -79,15 +79,70 @@ async def test_power_update_delay_one_tick() -> None:
         assert b.to_dict()["applied_target"] == 80
 
 
-def test_dc_passthrough_at_full_soc() -> None:
-    """Venus D-like: full SoC + DC input → AC output forced to DC value."""
-    b = _battery(max_dc_input=500, initial_soc=1.0, dc_input_power=500.0)
-    # Even if the AC target is "charge", passthrough should override.
-    b._apply_ct_derived_target(-300.0)
-    b._update_power(1.0)
-    assert b.current_power >= 500.0, (
-        f"Expected DC passthrough to force +500W, got {b.current_power}"
+def test_full_pack_curtails_pv_without_forcing_export() -> None:
+    b = _battery(
+        meter_dev_type="VNSD-0",
+        max_dc_input=500,
+        initial_soc=1.0,
+        dc_input_power=500.0,
     )
+    b._apply_ct_derived_target(-300.0)
+    b._advance(1.0)
+    assert b.current_power == 0
+    assert b.soc == 1
+
+
+@pytest.mark.parametrize("firmware_mode", [False, True])
+def test_full_pack_feed_in_respects_output_cap(firmware_mode: bool) -> None:
+    b = _battery(
+        meter_dev_type="VNSD-0",
+        max_dc_input=2000,
+        dc_input_power=1500,
+        initial_soc=1.0,
+        surplus_feed_in=True,
+        max_discharge_power=800,
+        phase_detection=firmware_mode,
+        stored_phase="A",
+    )
+    b._apply_ct_derived_target(0)
+    b._advance(1)
+    assert b.current_power == 800
+    assert b.soc == 1
+
+
+@pytest.mark.parametrize("dt", [0.1, 1.0, 60.0])
+def test_discharge_cannot_exceed_available_energy(dt: float) -> None:
+    b = _battery(capacity_wh=1, initial_soc=0.01, initial_power=800, ramp_rate=1)
+    before = b.soc * b.capacity_wh
+    b._advance(dt)
+    assert b.current_power * dt / 3600 == pytest.approx(before)
+    assert b.soc == pytest.approx(0)
+    b._advance(dt)
+    assert b.current_power == 0
+
+
+def test_empty_pack_can_supply_only_its_available_pv() -> None:
+    b = _battery(initial_soc=0, max_dc_input=500, dc_input_power=100)
+    b._apply_ct_derived_target(800)
+    b._advance(1)
+    assert b.current_power == 100
+    assert b.soc == 0
+
+
+def test_charging_reserves_cell_room_for_pv_and_stops_at_full() -> None:
+    b = _battery(
+        capacity_wh=1,
+        initial_soc=0.99,
+        initial_power=-800,
+        max_dc_input=500,
+        dc_input_power=10,
+        ramp_rate=1,
+    )
+    b._advance(1)
+    assert b.current_power == pytest.approx(-26)
+    assert b.soc == pytest.approx(1)
+    b._advance(1)
+    assert b.current_power == pytest.approx(0)
 
 
 def test_dc_passthrough_inactive_when_soc_below_one() -> None:
@@ -385,3 +440,90 @@ def test_venus_d_battery_discharges_on_import_charges_on_export() -> None:
     for _ in range(6):
         b._handle_ct_response(_response_fields(phase_targets=(-500, 0, 0)))
     assert b.target_power < 0  # charging to absorb the export
+
+
+@pytest.mark.parametrize("capacity", [0, -1])
+@pytest.mark.parametrize("pv", [0, 100])
+def test_no_capacity_provides_only_pv(capacity: float, pv: float) -> None:
+    b = _battery(capacity_wh=capacity, max_dc_input=500, dc_input_power=pv)
+    b._apply_ct_derived_target(800)
+    for _ in range(3):
+        b._advance(1)
+        assert b.current_power == pv
+    b._apply_ct_derived_target(-800)
+    b._advance(1)
+    assert b.current_power == 0
+
+
+def test_venus_d_feed_in_tracks_pv_and_soc_without_meter_replies() -> None:
+    b = _battery(
+        meter_dev_type="VNSD-0",
+        initial_soc=1,
+        max_dc_input=2000,
+        dc_input_power=500,
+        surplus_feed_in=True,
+    )
+    b._advance(1)
+    assert b.current_power == 510
+    b.dc_input_power = 200
+    b._advance(1)
+    assert b.current_power == 210
+    b.soc = 0.5
+    b._advance(1)
+    assert b.current_power == 0
+    b.soc = 1
+    b._advance(1)
+    assert b.current_power == 210
+    b.dc_input_power = 0
+    b._advance(1)
+    assert b.current_power == 0
+
+
+@pytest.mark.parametrize("output", [0, 1000])
+def test_venus_d_pv_respects_cell_charge_limit(output: float) -> None:
+    b = _battery(
+        meter_dev_type="VNSD-0",
+        max_charge_power=800,
+        max_discharge_power=2000,
+        max_dc_input=2500,
+        dc_input_power=2000,
+        capacity_wh=2000,
+    )
+    before = b.soc
+    b._apply_ct_derived_target(output)
+    b._advance(1)
+    assert b.current_power == output
+    assert (b.soc - before) * b.capacity_wh * 3600 == pytest.approx(800)
+
+
+@pytest.mark.parametrize("pv", [0, 500])
+def test_venus_d_combined_charging_respects_bms_cap(pv: float) -> None:
+    b = _battery(
+        meter_dev_type="VNSD-0",
+        max_charge_power=3000,
+        max_dc_input=1000,
+        dc_input_power=pv,
+        capacity_wh=5000,
+    )
+    before = b.soc
+    b._apply_ct_derived_target(-3000)
+    b._advance(1)
+    assert (b.soc - before) * b.capacity_wh * 3600 == pytest.approx(2500)
+
+
+def test_delayed_venus_d_commands_keep_the_unconditioned_target() -> None:
+    b = _battery(
+        2,
+        meter_dev_type="VNSD-0",
+        initial_soc=1,
+        surplus_feed_in=True,
+        max_dc_input=500,
+        dc_input_power=200,
+    )
+    b._apply_ct_derived_target(100)
+    b._advance(1)
+    b._advance(1)
+    assert b.current_power == 210
+    b.dc_input_power = 0
+    b._advance(1)
+    assert b.current_power == 100

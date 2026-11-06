@@ -204,13 +204,13 @@ def test_venus_d_charge_cap_is_2500_w() -> None:
     assert b.target_power == -1500.0
 
 
-def test_pv_rules_are_venus_d_only_and_need_firmware_mode() -> None:
-    for b in (
-        _venus_d(meter_dev_type="VNSE3-0", dc_input_power=600),
-        _venus_d(phase_detection=False, dc_input_power=600),
-    ):
-        b._apply_ct_derived_target(-800.0)
-        assert b.target_power == -800.0
+def test_pv_rules_are_venus_d_only_in_both_simulation_modes() -> None:
+    b = _venus_d(meter_dev_type="VNSE3-0", dc_input_power=600)
+    b._apply_ct_derived_target(-800.0)
+    assert b.target_power == -800.0
+    b = _venus_d(phase_detection=False, dc_input_power=600)
+    b._apply_ct_derived_target(-800.0)
+    assert b.target_power == -200.0
 
 
 def test_venus_d_surplus_feed_in_floors_the_output() -> None:

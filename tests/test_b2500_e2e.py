@@ -250,26 +250,19 @@ async def test_mixed_surplus_only_venus_absorbs() -> None:
 
 
 @pytest.mark.parametrize("active_control", [True, False])
-async def test_b2500_full_soc_passthrough_absorbed_by_venus(
+async def test_b2500_full_soc_curtails_surplus_pv(
     active_control: bool,
 ) -> None:
-    """A full B2500 with surplus PV passes it through to its DC output (it can't
-    store it). That output settles at the PV level — the steering can't curtail
-    below the passthrough — and a co-resident Venus absorbs the exported surplus,
-    so the grid still nulls. (The DC analog of the issue #376 passthrough.)"""
+    """A full B2500 curtails PV instead of forcing it through the inverter."""
     # 500 W PV, full SoC; only 100 W local load, so ~400 W of PV is surplus.
     h = _MixedHarness(active_control=active_control, b2500_pv=500.0, b2500_soc=1.0)
     h.load_model.base_load = [100.0, 0.0, 0.0]
     await h.start()
     try:
         await h.settle(300)
-        # B2500 outputs ~its PV (passthrough floor); it never sinks below it and
-        # has not wound up far above it (no integrator runaway).
-        assert 470 <= h.b2500.current_power <= 560
-        assert h.venus.current_power < -300  # Venus absorbs the exported surplus
-        # Grid nulled despite the passthrough. The bound is 40 W rather than a
-        # tighter one because a B2500 cannot command below its own 80 W minimum,
-        # so a residual of that order is the device's, not the balancer's.
+        assert 0 <= h.b2500.current_power < 150
+        assert h.b2500.soc == pytest.approx(1)
+        # Its minimum command can leave a small residual for the Venus.
         assert abs(h.grid()) < 40
     finally:
         await h.stop()
