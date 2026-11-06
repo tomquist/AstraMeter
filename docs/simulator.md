@@ -272,6 +272,11 @@ network:
 - When solar exceeds consumption, the grid goes negative (export) and the
   batteries charge
 - Batteries track SOC and saturate at 0%/100%
+- With firmware phase detection enabled, Venus A/D/E meter reads time out
+  after 600 ms. Silence adds one failure, rejected packets add ten, and a
+  score above 60 takes the meter offline; a fresh valid reply restores it.
+  HMG-50 retains its separate 24-failure policy. FC41D reconnect commands
+  themselves are not simulated, so outage timing can differ by a poll cycle.
 - Batteries report phase `0` for their first poll and their configured phase
   after that. Built with `BatterySimulator(phase_detection=True)` (the Python
   API the end-to-end tests use; not in the JSON config yet), they instead run

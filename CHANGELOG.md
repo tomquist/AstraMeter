@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Fixed** Venus battery simulations stopping output too early during meter outages; lost packets, rejected replies, and recovery now follow the Venus firmware's own communication thresholds and timeout. ([#768](https://github.com/tomquist/astrameter/pull/768))
+
 
 ## 2.5.0
 
