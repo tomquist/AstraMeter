@@ -264,6 +264,7 @@ The Python API's Venus simulations support CT002/CT003, SMR-0/SMR-1, and
 TPM2-0 meter types. Venus with `ct_dev_type="SMR-2"` is rejected explicitly:
 that firmware meter type uses a separate timed controller which is not yet
 modelled. Phase detection can be bypassed without changing this restriction.
+Changing `ct_dev_type` at runtime validates the new type before applying it.
 
 The simulator is fully decoupled from astrameter — everything goes over the
 network:

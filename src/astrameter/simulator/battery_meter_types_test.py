@@ -36,3 +36,22 @@ def test_venus_uses_its_meter_type_for_the_spike_gate(
     else:
         b._handle_ct_response(fields)
     assert b.target_power == 495
+
+
+@pytest.mark.parametrize("firmware_mode", [False, True])
+def test_runtime_meter_type_changes_are_validated_and_used(firmware_mode: bool) -> None:
+    b = _battery(
+        meter_dev_type="VNSE3-0", phase_detection=firmware_mode, stored_phase="A"
+    )
+    with pytest.raises(ValueError, match="SMR-2 steering"):
+        b.ct_dev_type = "SMR-2"
+    assert b.ct_dev_type == "HME-4"
+    b.ct_dev_type = "SMR-0"
+    fields = _response_fields(phase_targets=(500, 0, 0))
+    fields[0] = "SMR-0"
+    fields[8] = "1"
+    if firmware_mode:
+        b._receive_firmware(fields)
+    else:
+        b._handle_ct_response(fields)
+    assert b.target_power == 495
