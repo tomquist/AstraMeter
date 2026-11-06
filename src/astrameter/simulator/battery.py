@@ -46,6 +46,13 @@ WILDCARD_CT_MAC = "000000000000"
 # Consecutive failed polls after which the meter task marks the meter offline:
 # six failures per reconnect cycle, four cycles (HMG-50 0x08023cae-0x08023cc6).
 METER_OFFLINE_AFTER_FAILURES = 24
+# Venus E3/D/A v151 uses a different FC41D task: a silent UDP read costs
+# one failure, a rejected packet costs ten, and the task reconnects once the
+# counter is >60 (VNSE3-0 0x0800847e, 0x08029954). Its read timeout is 600 ms
+# (0x0802f270). Do not apply the HMG-50's four six-failure cycles to it.
+VENUS_METER_OFFLINE_AFTER_FAILURES = 61
+VENUS_INVALID_REPLY_FAILURES = 10
+VENUS_REPLY_TIMEOUT_S = 0.6
 
 # The Venus D's power setter (VNSD-0 v151 0x0800a968), which detection and
 # steering both go through, adds two PV rules the Venus E 3.0's (VNSE3-0
@@ -474,7 +481,7 @@ class BatterySimulator:
                 timeout=2.0,
             )
             transport.sendto(payload)
-            data = await asyncio.wait_for(proto.received, timeout=2.0)
+            data = await asyncio.wait_for(proto.received, timeout=self._reply_timeout())
         except (asyncio.TimeoutError, TimeoutError, OSError) as exc:
             logger.debug("Battery %s: request failed: %s", self.mac, exc)
             self._note_failed_poll()
@@ -486,7 +493,7 @@ class BatterySimulator:
         response_fields, err = protocol.parse_request(data)
         if response_fields is None:
             logger.debug("Battery %s: bad response: %s", self.mac, err)
-            self._note_failed_poll()
+            self._note_failed_poll(invalid_reply=True)
             return None
 
         if self._detector is not None:
@@ -502,11 +509,25 @@ class BatterySimulator:
 
     # -- firmware reply handling (phase detection on) ------------------------
 
-    def _note_failed_poll(self) -> None:
+    def _reply_timeout(self) -> float:
+        return VENUS_REPLY_TIMEOUT_S if self._uses_venus_meter_task() else 2.0
+
+    def _uses_venus_meter_task(self) -> bool:
+        return self._is_venus_integer and not self._is_hmg50
+
+    def _note_failed_poll(self, *, invalid_reply: bool = False) -> None:
         if self._detector is None:
             return
-        self._failed_polls += 1
-        if self._failed_polls >= METER_OFFLINE_AFTER_FAILURES:
+        venus = self._uses_venus_meter_task()
+        self._failed_polls += (
+            VENUS_INVALID_REPLY_FAILURES if venus and invalid_reply else 1
+        )
+        threshold = (
+            VENUS_METER_OFFLINE_AFTER_FAILURES
+            if venus
+            else METER_OFFLINE_AFTER_FAILURES
+        )
+        if self._failed_polls >= threshold:
             self._meter_online = False
 
     def _accept_reply(self, fields: list[str]) -> int:
@@ -536,7 +557,12 @@ class BatterySimulator:
         its arrival wakes."""
         verdict = self._accept_reply(fields)
         if verdict == 0:
-            self._note_failed_poll()
+            self._note_failed_poll(invalid_reply=True)
+            return
+        if verdict == 2 and self._uses_venus_meter_task():
+            # The parser's duplicate verdict neither supplies a new sample
+            # nor clears failures/sets online (0x08029964). A fresh valid
+            # reply below is what restores the meter after reconnect.
             return
         self._failed_polls = 0
         self._meter_online = True

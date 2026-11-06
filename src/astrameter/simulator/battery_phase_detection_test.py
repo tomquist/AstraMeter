@@ -5,12 +5,16 @@ Replies are fed straight to the reply handler, so no UDP is involved.
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+import json
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
 from astrameter.simulator.battery import (
     METER_OFFLINE_AFTER_FAILURES,
+    VENUS_METER_OFFLINE_AFTER_FAILURES,
     BatterySimulator,
 )
 from astrameter.simulator.phase_detection import HMG50PhaseDetector, VenusPhaseDetector
@@ -151,6 +155,83 @@ def test_meter_goes_offline_after_failed_polls() -> None:
     assert b.meter_online
     b._note_failed_poll()
     assert not b.meter_online
+
+
+def test_venus_meter_loss_matches_recorded_firmware_poll_schedule() -> None:
+    trace = json.loads(
+        (Path(__file__).parent / "fixtures/venus_v151_meter_loss.json").read_text()
+    )
+    b = _battery(meter_dev_type="VNSE3-0", stored_phase="A", initial_power=795)
+    now = trace["last_valid_reply"]
+    b._fw_time = now
+    b._fw_next_tick = now
+    b._receive_firmware(_reply(a=5, b=0, c=0))
+    for poll in trace["lost_poll_times"]:
+        failure_at = poll + b._reply_timeout()
+        b._advance(failure_at - now)
+        now = failure_at
+        b._note_failed_poll()
+        if not b.meter_online:
+            b._advance(0.03)
+            break
+        assert b.target_power == 795
+    assert b._failed_polls == VENUS_METER_OFFLINE_AFTER_FAILURES
+    # FC41D reconnect attempts can fail without sending a UDP datagram. The
+    # simulator has no AT module; its per-poll approximation should be within
+    # one reconnect/poll cycle of the recorded firmware, not 42 seconds early.
+    assert trace["zero_reference_after"] < now + 0.03 <= trace["zero_reference_by"] + 2
+    assert b.target_power == 0
+    # A new valid reply restores online status and normal regulation.
+    b._receive_firmware(_reply(a=500, b=0, c=0, info_idx=2))
+    b._receive_firmware(_reply(a=500, b=0, c=0, info_idx=3))
+    assert b.meter_online and b._failed_polls == 0
+    assert b.target_power > 0
+
+
+def test_venus_rejected_replies_cost_ten_but_duplicates_do_not_reset_failures() -> None:
+    b = _battery(meter_dev_type="VNSE3-0", stored_phase="A", ct_mac="112233445566")
+    b._receive_firmware(_reply(info_idx=1))
+    for _ in range(6):
+        b._receive_firmware(_reply(ct_mac="WRONG", info_idx=2))
+    assert b.meter_online and b._failed_polls == 60
+    b._receive_firmware(_reply(info_idx=1))
+    assert b._failed_polls == 60
+    b._note_failed_poll()
+    assert not b.meter_online
+    b._receive_firmware(_reply(info_idx=1))
+    assert not b.meter_online
+    b._receive_firmware(_reply(info_idx=2))
+    assert b.meter_online and b._failed_polls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("malformed,cost", [(False, 1), (True, 10)])
+async def test_venus_udp_failures_use_the_correct_failure_weight(
+    malformed: bool,
+    cost: int,
+) -> None:
+    class Meter(asyncio.DatagramProtocol):
+        def connection_made(self, transport: asyncio.BaseTransport) -> None:
+            self.transport = cast(asyncio.DatagramTransport, transport)
+
+        def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+            if malformed:
+                self.transport.sendto(b"invalid CT reply", addr)
+
+    transport, _ = await asyncio.get_running_loop().create_datagram_endpoint(
+        Meter,
+        local_addr=("127.0.0.1", 0),
+    )
+    try:
+        b = _battery(
+            meter_dev_type="VNSE3-0",
+            stored_phase="A",
+            ct_port=transport.get_extra_info("sockname")[1],
+        )
+        assert await b._send_request() is None
+        assert b._failed_polls == cost
+    finally:
+        transport.close()
 
 
 def test_start_phase_detection_drops_output_and_phase() -> None:
