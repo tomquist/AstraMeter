@@ -510,7 +510,9 @@ class BatterySimulator:
     # -- firmware reply handling (phase detection on) ------------------------
 
     def _reply_timeout(self) -> float:
-        return VENUS_REPLY_TIMEOUT_S if self._uses_venus_meter_task() else 2.0
+        if self._detector is not None and self._uses_venus_meter_task():
+            return VENUS_REPLY_TIMEOUT_S
+        return 2.0
 
     def _uses_venus_meter_task(self) -> bool:
         return self._is_venus_integer and not self._is_hmg50

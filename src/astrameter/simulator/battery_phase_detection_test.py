@@ -326,3 +326,14 @@ def test_venus_d_charge_probe_shrinks_with_pv() -> None:
         b._advance(0.1)
     assert b.detector is not None and not b.detector.steering
     assert b.target_power == -200.0
+
+
+@pytest.mark.parametrize("device", ["VNSE3-0", "VNSD-0", "HMG-50"])
+@pytest.mark.parametrize("firmware_mode", [False, True])
+def test_receive_timeout_depends_on_firmware_meter_task(
+    device: str,
+    firmware_mode: bool,
+) -> None:
+    b = _battery(meter_dev_type=device, phase_detection=firmware_mode)
+    expected = 0.6 if firmware_mode and device != "HMG-50" else 2.0
+    assert b._reply_timeout() == expected
