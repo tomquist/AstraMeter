@@ -86,12 +86,12 @@ separates these units from a B2500 (:mod:`b2500_steering`):
   appears in any Venus image, while all eleven appear in all ten archived
   HMG-50 images.
 
-Scope: this is the **run mode 10** carve-out. Ahead of everything above, the
-routine tests a mode byte and, when it reads 10, hands ``(out, g)`` to a
-different function and stores that result to an unrelated RAM word
+Scope: this excludes **meter type 10 (SMR-2)**. Ahead of everything above, the
+routine tests the configured meter-type byte and, when it reads 10, hands
+``(out, g)`` to a different function and stores its result to another RAM word
 (``0x20000300``), leaving the steering setpoint untouched. Nothing here
-describes that path; the model covers the CT-following modes the balancer
-drives.
+describes that path; BatterySimulator rejects a Venus configured for SMR-2
+until that timed controller is modelled.
 
 ``out`` is a signed 16-bit field of the device status struct (``+0x18``). Its
 identity is inferred, not read: the gate's spike filter tests *"the grid jumped
@@ -188,6 +188,7 @@ class VenusIntegerSteeringController:
         *,
         out: float = 0.0,
         device_count: int = 1,
+        meter_code: int = 3,
     ) -> int:
         """Advance one regulation cycle for bucket value *g*; return the setpoint.
 
@@ -203,11 +204,11 @@ class VenusIntegerSteeringController:
         firmware's early return does.
         """
         g_i = _share_split(g, device_count)
-        if not self._gate(g_i, int(out), device_count):
+        if not self._gate(g_i, int(out), device_count, meter_code):
             return self.setpoint
         return self.step_raw(g_i, hi, lo, out=out, device_count=device_count)
 
-    def _gate(self, g: int, out: int, device_count: int) -> bool:
+    def _gate(self, g: int, out: int, device_count: int, meter_code: int = 3) -> bool:
         """The firmware's pre-integrator gate; ``True`` ⇒ run the integrator.
 
         Three holds, in order: a >50 W spike the own output cannot explain, a
@@ -216,10 +217,11 @@ class VenusIntegerSteeringController:
         after a skipped one is forced through, bypassing the two holds below —
         and it is skipped entirely when several units share the bucket, which is
         also when the baselines stop advancing. The firmware additionally
-        requires the run mode to be in 1..6 and not 2; a CT-following unit
-        always is, so that test is not modelled.
+        requires the configured meter type to be in 1..6 and not 2. These are
+        meter codes, not operating modes: SMR and TPM2 meters bypass the spike
+        stage, but still pass through the rest deadband and small-import hold.
         """
-        if device_count <= 1:
+        if device_count <= 1 and 1 <= meter_code <= 6 and meter_code != 2:
             d_out = abs(out - self.prev_out)
             d_g = abs(g - self.prev_g)
             self.prev_g = g

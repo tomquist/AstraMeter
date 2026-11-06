@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Fixed** Venus simulations unnecessarily delaying load changes with SMR and TPM2 meters; unsupported SMR-2 steering now reports an error instead of silently using the wrong controller. ([#767](https://github.com/tomquist/astrameter/pull/767))
+
 
 ## 2.5.0
 
