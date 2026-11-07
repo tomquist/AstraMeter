@@ -157,3 +157,158 @@ def test_venus_e3_detects_its_phase_and_nulls_the_total() -> None:
         assert 350 < device.ac_power < 500
     finally:
         h.close()
+
+
+def _identity(n: int) -> dict[str, Any]:
+    """A distinct MCU UID, module MAC and IP for the n-th emulated battery, so
+    two units built from the same image are two consumers to the CT002."""
+    from marsemu.fc41d.module import Fc41dConfig
+
+    return {
+        "uid": bytes([0x40 + n] * 12),
+        "fc41d": Fc41dConfig(
+            wifi_mac=f"c8:47:8c:00:{n:02x}:01",
+            ble_mac=f"c8:47:8c:00:{n:02x}:02",
+            ip=f"192.168.1.{50 + n}",
+        ),
+    }
+
+
+class _Fleet:
+    """Several emulated batteries in one house behind one ``CT002``, on one
+    emulated timeline (``marsemu.run_together``)."""
+
+    def __init__(self, devices: dict[str, tuple[Any, str]], house: Any) -> None:
+        if not hasattr(marsemu, "run_together"):
+            pytest.skip("marsemu without multi-device support (run_together)")
+        self.devices = {name: d for name, (d, _) in devices.items()}
+        self.house = house
+        first = next(iter(self.devices.values()))
+        self.ct002 = CT002(
+            ct_mac=CT_MAC, active_control=True, clock=lambda: T0 + first.time
+        )
+        self.ct002.before_send = self._meter
+        self._loop = asyncio.new_event_loop()
+        self._topics: dict[str, str] = {}
+        for k, (name, (device, phase)) in enumerate(devices.items()):
+            marsemu.connect_house(
+                device, house, meter=self._answer, phase=phase, name=name
+            )
+            self._configure(name, device, at=30.0 + 40.0 * k)
+
+    def _configure(self, name: str, device: Any, at: float) -> None:
+        """Self-consumption with our CT, as the app would, one battery after
+        the other: batteries that start their phase probes together cannot
+        tell their phases apart."""
+        emu = device.control
+        emu.on("mqtt_subscribe", lambda t: self._topics.setdefault(name, t))
+
+        def setup() -> None:
+            topic = self._topics.get(name)
+            if topic is None:
+                device.sim.after(1.0, setup)
+                return
+            emu.mqtt_inject(topic, "cd=2,md=0")
+            device.sim.after(
+                2.0, lambda: emu.mqtt_inject(topic, f"cd=18,meter=3,mac={CT_MAC}")
+            )
+
+        device.sim.at(at, setup)
+
+    def send(self, name: str, payload: str, delay: float = 0.0) -> None:
+        """An MQTT command to battery *name* once it is configured."""
+        device = self.devices[name]
+
+        def go() -> None:
+            topic = self._topics.get(name)
+            if topic is None:
+                device.sim.after(1.0, go)
+                return
+            device.control.mqtt_inject(topic, payload)
+
+        device.sim.after(delay, go)
+
+    async def _meter(self, addr: Any, request: Any, consumer_id: str) -> list[float]:
+        g = self.house.grid()
+        return [g["A"], g["B"], g["C"]]
+
+    def _answer(self, data: bytes, addr: tuple[str, int]) -> bytes | None:
+        sink = _Sink()
+        self._loop.run_until_complete(self.ct002._handle_request(data, addr, sink))
+        return sink.sent[-1] if sink.sent else None
+
+    @property
+    def time(self) -> float:
+        return float(next(iter(self.devices.values())).time)
+
+    def run(self, seconds: float) -> None:
+        marsemu.run_together(list(self.devices.values()), seconds)
+
+    def every(self, period: float, fn: Any) -> None:
+        next(iter(self.devices.values())).sim.every(period, fn)
+
+    def close(self) -> None:
+        for device in self.devices.values():
+            device.close()
+        self._loop.close()
+
+
+@pytest.mark.timeout(2400)
+def test_full_venus_d_passing_pv_through_does_not_stop_the_others() -> None:
+    """Issue #763: a full Venus D feeds its PV surplus into the grid (phase A)
+    while an AC-only Venus D (B) and a Venus E 3.0 (C) charge from the export.
+    Its passthrough must never reach the others as cross-talk discharge: a
+    charging Venus drops to 0 W on any *_dchrg_power, and the pair would
+    switch on and off for as long as the PV unit is full."""
+    d_control = _image(ARCHIVE, "**/VNSD-0/Control/151/*.bin")
+    d_bms = _image(ARCHIVE, "**/VNSD-0/BMS/118/*.bin")
+    e_control = _image(ARCHIVE, "**/VNSE3-0/Control/151/*.bin")
+    e_bms = _image(ARCHIVE, "**/VNSE3-0/BMS/115/*.bin")
+    from marsemu.plant.battery import LfpPack
+
+    pv_unit = marsemu.VenusD(
+        d_control,
+        d_bms,
+        pv=[750, 750, 0, 0],
+        pack=LfpPack(soc=1.0, capacity_ah=100.0),
+        control_kwargs=_identity(1),
+    )
+    ac_unit = marsemu.VenusD(
+        d_control,
+        d_bms,
+        pack=LfpPack(soc=0.5, capacity_ah=100.0),
+        control_kwargs=_identity(2),
+    )
+    venus_e = marsemu.VenusE3(
+        e_control, e_bms, pack=LfpPack(soc=0.5), control_kwargs=_identity(3)
+    )
+    house = marsemu.House({"A": -1000.0, "B": -800.0, "C": -800.0})
+    fleet = _Fleet(
+        {"A": (pv_unit, "A"), "B": (ac_unit, "B"), "C": (venus_e, "C")}, house
+    )
+    fleet.send("A", "cd=43,full_d=1", delay=40.0)  # surplus feed-in when full
+    samples: list[tuple[float, float, float, float]] = []
+    fleet.every(
+        1.0,
+        lambda now: samples.append(
+            (now, pv_unit.ac_power, ac_unit.ac_power, venus_e.ac_power)
+        ),
+    )
+    try:
+        fleet.run(500)
+        phases = {c.last_ip: c.phase for c in fleet.ct002.status_snapshot().consumers}
+        assert phases == {
+            "192.168.1.51": "A",
+            "192.168.1.52": "B",
+            "192.168.1.53": "C",
+        }, phases
+        # From once all three are steering and the PV unit exports
+        settled = [s for s in samples if s[0] >= 260]
+        assert max(s[1] for s in settled) > 200, "the full Venus D never exported"
+        for _, a, b, c in settled:
+            assert b < -100 and c < -100, (
+                f"a charging battery stopped while the full one exported {a:.0f} W: "
+                f"B {b:.0f} W, C {c:.0f} W"
+            )
+    finally:
+        fleet.close()
