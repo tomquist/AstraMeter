@@ -70,6 +70,10 @@ enum PhaseBucket : size_t {
 constexpr double ADAPTIVE_TTL_POLL_MULTIPLIER = 2.0;
 constexpr double ADAPTIVE_TTL_MIN_SECONDS = 5.0;
 constexpr double ADAPTIVE_TTL_FALLBACK_SECONDS = 30.0;
+// A battery still detecting its phase (polling with phase "0") this long is
+// stuck; warned about once per sweep. Mirrors ct002.py
+// STUCK_INSPECTION_WARN_SECONDS (issues #559, #703).
+constexpr double STUCK_INSPECTION_WARN_SECONDS = 300.0;
 
 // A run of this many consecutive nonzero sub-1 W readings on a phase whose
 // sensor declares no unit_of_measurement triggers a one-shot "input looks
@@ -456,6 +460,7 @@ class CT002Component : public Component {
   // _sync_inspection_filters — see its docstring for the full rationale
   // (issue #652).
   void sync_inspection_filters_(const std::string &consumer_id, bool inspecting);
+  void note_stuck_inspection_(const std::string &consumer_id, bool inspecting);
 
   // Folds the gap since the previous reply to this consumer into its
   // answer_interval. Called right after a response goes out.
@@ -562,6 +567,10 @@ class CT002Component : public Component {
   // Consumers whose last poll was an inspection poll (phase "0"), mirroring
   // ct002.py's _inspecting.
   std::unordered_set<std::string> inspecting_;
+  // When each inspecting consumer started, and those already warned about
+  // (mirrors ct002.py _inspecting_since / _stuck_inspection_warned).
+  std::unordered_map<std::string, double> inspecting_since_;
+  std::unordered_set<std::string> stuck_inspection_warned_;
 
   // Pending wrapper configs captured before setup() — applied at setup()
   // time when the SensorBackedPowermeter exists.

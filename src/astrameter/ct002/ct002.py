@@ -95,6 +95,10 @@ PHASE_BUCKETS = ("x", "A", "B", "C", "ABC")
 ADAPTIVE_TTL_POLL_MULTIPLIER = 2.0
 ADAPTIVE_TTL_MIN_SECONDS = 5.0
 ADAPTIVE_TTL_FALLBACK_SECONDS = 30.0
+# A battery still detecting its phase (polling with phase '0') this long is
+# stuck: a probe takes seconds, and a Venus gives up after three attempts a
+# minute apart.  Warned about once per sweep (issues #559, #703).
+STUCK_INSPECTION_WARN_SECONDS = 300.0
 
 
 def _ema_interval(previous: float | None, raw: float) -> float:
@@ -548,6 +552,10 @@ class CT002:
         # sweep and to hand the control loop a fresh baseline once it ends —
         # see _sync_inspection_filters.
         self._inspecting: set[str] = set()
+        # When each inspecting consumer started, and those already warned
+        # about (see _note_stuck_inspection).
+        self._inspecting_since: dict[str, float] = {}
+        self._stuck_inspection_warned: set[str] = set()
         # Clears the powermeter wrappers' rolling state (Hampel window, EMA,
         # deadband).  The balancer holds the same hook for its efficiency
         # probe; the CT002 emulator uses it around an inspection sweep.
@@ -952,6 +960,8 @@ class CT002:
             # phase poll that ends the sweep, so drop it here rather than leave
             # it marked as inspecting forever.
             self._inspecting.discard(key)
+            self._inspecting_since.pop(key, None)
+            self._stuck_inspection_warned.discard(key)
         if stale:
             self._rev += 1
         # Dedup entries only matter within the dedupe window; with an adaptive
@@ -1589,6 +1599,7 @@ class CT002:
         the swing is on the grid it shares, so those readings are just as real
         for it.
         """
+        self._note_stuck_inspection(consumer_id, inspecting)
         if inspecting:
             self._inspecting.add(consumer_id)
         elif consumer_id in self._inspecting:
@@ -1597,6 +1608,44 @@ class CT002:
             return
         if self._reset_fn is not None:
             self._reset_fn()
+
+    def _note_stuck_inspection(self, consumer_id: str, inspecting: bool) -> None:
+        """Warn once when a battery stays in phase detection for good.
+
+        Neither stuck state ends on its own, and the battery just sits idle:
+        a B2500 whose detection fails (e.g. a second battery probing at the
+        same moment moves another phase too) never retries, and a Venus below
+        its backup / discharge cut-off SoC does not start detection at all
+        until it is above it.  Both were reproduced against the real firmware
+        (issues #559, #703).
+        """
+        if not inspecting:
+            since = self._inspecting_since.pop(consumer_id, None)
+            if consumer_id in self._stuck_inspection_warned:
+                self._stuck_inspection_warned.discard(consumer_id)
+                logger.info(
+                    "CT002: battery %s found its phase after %.0f min",
+                    consumer_id,
+                    (self._clock() - since) / 60 if since is not None else 0,
+                )
+            return
+        now = self._clock()
+        since = self._inspecting_since.setdefault(consumer_id, now)
+        if (
+            now - since >= STUCK_INSPECTION_WARN_SECONDS
+            and consumer_id not in self._stuck_inspection_warned
+        ):
+            self._stuck_inspection_warned.add(consumer_id)
+            logger.warning(
+                "CT002: battery %s has been detecting its phase (phase 0) for "
+                "%.0f min and is not steered meanwhile. A B2500 does not retry "
+                "a failed detection: select the meter for it again in the app "
+                "(one battery at a time) or restart it. A Venus below its "
+                "backup / discharge cut-off SoC does not detect until it is "
+                "above it.",
+                consumer_id,
+                (now - since) / 60,
+            )
 
     def _decode_request(
         self, data: bytes, addr: tuple[str, int]
