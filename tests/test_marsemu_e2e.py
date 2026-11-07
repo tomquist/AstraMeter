@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import glob
+import logging
 import os
 from typing import Any
 
@@ -253,9 +254,16 @@ class _Fleet:
         next(iter(self.devices.values())).sim.every(period, fn)
 
     def close(self) -> None:
+        """Close every device and the loop, then raise the first failure."""
+        errors: list[Exception] = []
         for device in self.devices.values():
-            device.close()
+            try:
+                device.close()
+            except Exception as exc:  # re-raised below
+                errors.append(exc)
         self._loop.close()
+        if errors:
+            raise errors[0]
 
 
 @pytest.mark.timeout(2400)
@@ -320,7 +328,9 @@ def test_full_venus_d_passing_pv_through_does_not_stop_the_others() -> None:
 
 
 @pytest.mark.timeout(1800)
-def test_venus_e3_below_its_backup_soc_is_never_rotated_to() -> None:
+def test_venus_e3_below_its_backup_soc_is_never_rotated_to(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Issue #703: a Venus E 3.0 below its discharge cut-off (depth of
     discharge 30, so 70 %, at 66 %) never runs its phase detection and keeps
     polling as phase 0, even under an export it could charge from.  With
@@ -349,9 +359,19 @@ def test_venus_e3_below_its_backup_soc_is_never_rotated_to() -> None:
     )
     fleet.send("low", "cd=56,dod=30", delay=25.0)
     try:
-        fleet.run(360)
+        with caplog.at_level(logging.INFO, logger="astrameter"):
+            fleet.run(360)
         consumers = {c.last_ip: c for c in fleet.ct002.status_snapshot().consumers}
         assert consumers["192.168.1.53"].phase == "0", "the low battery found a phase"
+        # Not even briefly: AstraMeter 2.3.0 ends in the same state, having
+        # probed the low battery and fallen back to the healthy one each time.
+        low_id = consumers["192.168.1.53"].consumer_id
+        rotations = [
+            r.getMessage()
+            for r in caplog.records
+            if r.getMessage().startswith("Efficiency:") and low_id in r.getMessage()
+        ]
+        assert not rotations, rotations
         assert consumers["192.168.1.54"].phase == "A"
         assert abs(low.ac_power) < 20
         assert abs(sum(house.grid().values())) < 50, (
