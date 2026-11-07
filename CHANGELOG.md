@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Added** a warning when a battery is stuck detecting its phase for five minutes, with what to do: a B2500 never retries a failed detection, and a Venus below its backup SoC waits until it is above it ([#559](https://github.com/tomquist/astrameter/issues/559), [#703](https://github.com/tomquist/astrameter/issues/703)).
+- **Added** a warning when a battery is stuck detecting its phase for five minutes, with what to do: a B2500 never retries a failed detection, and a Venus below its backup SoC waits until it is above it ([#559](https://github.com/tomquist/astrameter/issues/559), [#703](https://github.com/tomquist/astrameter/issues/703), [#772](https://github.com/tomquist/astrameter/pull/772)).
 
 
 ## 2.5.0
