@@ -1129,6 +1129,7 @@ class CT002:
         by_phase = {bucket: PhaseBucket() for bucket in PHASE_BUCKETS}
 
         now = self._clock()
+        reporting = []
         for consumer in self._consumers.values():
             if consumer.timestamp <= 0:
                 continue
@@ -1144,6 +1145,21 @@ class CT002:
             # ages its slots in 30 s steps.
             if self._consumer_expired(consumer, now):
                 continue
+            reporting.append(consumer)
+        # Under active control, while the balancer asks any battery to charge,
+        # no discharge goes into the cross-talk fields: a charging Venus drops
+        # to 0 W the moment any *_dchrg_power is non-zero (its guard against
+        # charging from another battery), which would undo our own target.  The
+        # discharge in question is typically a full battery passing PV through
+        # whose intent drifts up to its passthrough as the grid settles, so the
+        # per-battery filter below lets it out (issue #763).
+        any_charge_intent = self.active_control and any(
+            (intent := self._balancer.get_last_intent(c.consumer_id)) is not None
+            and intent < 0
+            for c in reporting
+            if _bucket_for_phase(c.phase) in ("A", "B", "C", "ABC")
+        )
+        for consumer in reporting:
             bucket = _bucket_for_phase(consumer.phase)
             if self.active_control and bucket in ("A", "B", "C", "ABC"):
                 # Active control: use the net AC power we *instructed* this
@@ -1164,6 +1180,8 @@ class CT002:
                 if intent is not None and (
                     (intent <= 0 and power > 0) or (intent >= 0 and power < 0)
                 ):
+                    power = 0
+                if any_charge_intent and power > 0:
                     power = 0
             else:
                 # Relay mode forwards each battery's *reported* power, exactly

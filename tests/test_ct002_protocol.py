@@ -349,6 +349,35 @@ def test_ct002_discharging_battery_with_small_correction_keeps_dchrg_signal() ->
     assert response[15] == "0"  # A_chrg_power stays 0
 
 
+def test_ct002_hides_discharge_while_another_battery_is_told_to_charge() -> None:
+    """Regression for #763: a full Venus D passes 300 W of PV through and its
+    intent has drifted positive (its share of a small surplus no longer covers
+    the passthrough), while the Venus E on phase B is told to charge.  A
+    charging Venus drops to 0 W on any non-zero *_dchrg_power, so the
+    passthrough must stay out of the cross-talk fields."""
+    device = CT002()
+    request = CT002Request.from_fields(
+        ["VNSE3-0", "AABBCCDDEEFF", "HME-4", "112233445566", "B", "-800"]
+    )
+    device._update_consumer_report("venus-d", phase="A", power=300)
+    device._consumers["venus-d"].last_instructed_power = 290.0
+    device._balancer._get_consumer("venus-d").last_intent = 290.0
+    device._update_consumer_report("venus-e", phase="B", power=-800)
+    device._consumers["venus-e"].last_instructed_power = -810.0
+    device._balancer._get_consumer("venus-e").last_intent = -810.0
+
+    response = device._build_response_fields(request=request, values=[0, -10, 0])
+
+    assert response[20] == "0"  # A_dchrg_power: no discharge while B charges
+    assert response[16] == "-810"  # B_chrg_power still carries the charge
+
+    # Once nobody is told to charge, a real discharge is forwarded again.
+    device._balancer._get_consumer("venus-e").last_intent = 0.0
+    device._consumers["venus-e"].last_instructed_power = 0.0
+    response = device._build_response_fields(request=request, values=[0, 0, 0])
+    assert response[20] == "290"
+
+
 async def _drive_request(
     device: CT002,
     battery_mac: str,

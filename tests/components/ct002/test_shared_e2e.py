@@ -633,6 +633,31 @@ def test_crosstalk_charge_signals_other_battery(backend: Backend) -> None:
     )
 
 
+@pytest.mark.timeout(30, func_only=True)
+def test_crosstalk_hides_passthrough_while_another_charges(backend: Backend) -> None:
+    """No discharge in cross-talk while another battery is told to charge.
+
+    Issue #763: X on phase A is full and passes 300 W of PV through, Y on
+    phase B charges at 800 W, and the grid is nearly balanced.  X's share of
+    the small surplus no longer outweighs its passthrough, so its intent turns
+    positive; a charging Venus drops to 0 W as soon as any *_dchrg_power is
+    non-zero, so Y's reply must keep A_dchrg_power at 0 while Y is told to
+    charge.
+    """
+    backend.set_clock(17000)
+    backend.set_grid(-20)  # small surplus left over
+    for _ in range(3):
+        rx = backend.poll("E5E5E5E5E5E5", "A", 300)
+        assert rx is not None, f"[{backend.name}] no response to battery X"
+        ry = backend.poll("F6F6F6F6F6F6", "B", -800)
+        assert ry is not None, f"[{backend.name}] no response to battery Y"
+        assert int(ry[_A_DCHRG]) == 0, (
+            f"[{backend.name}] A_dchrg_power must stay 0 while Y charges, "
+            f"got {ry[_A_DCHRG]}"
+        )
+        backend.advance_clock(1.0)
+
+
 # Bucket field indices beyond A/B/C: x_chrg=14/x_dchrg=19 (unassigned /
 # inspection), ABC_chrg_nb=11, ABC_chrg=18/ABC_dchrg=23 (combined, phase "D").
 _X_CHRG, _X_DCHRG = 14, 19
