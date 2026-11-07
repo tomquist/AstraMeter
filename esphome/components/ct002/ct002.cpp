@@ -677,17 +677,38 @@ bool CT002Component::consumer_expired_(const Consumer &c, double now) const {
 CT002Component::PhaseReports CT002Component::collect_reports_by_phase_() const {
   PhaseReports out;
   const double now = this->now_seconds_();
+  // Respect the request's "participate" flag: a battery that opted out (7th
+  // field == 0) is not aggregated into the per-phase buckets or the count.
+  // Skip a consumer past its TTL per response, so a battery that drops off
+  // the network stops being counted at poll granularity rather than at the
+  // next cleanup interval, which removes the entry shortly after (issue
+  // #462). The real CT is slower here: it ages its slots in 30 s steps.
+  auto reporting = [&](const Consumer &c) {
+    return c.timestamp > 0.0 && c.participates && !this->consumer_expired_(c, now);
+  };
+  // Under active control, while the balancer asks any battery to charge, no
+  // discharge goes into the cross-talk fields: a charging Venus drops to 0 W
+  // the moment any *_dchrg_power is non-zero (its guard against charging from
+  // another battery), which would undo our own target. The discharge in
+  // question is typically a full battery passing PV through whose intent
+  // drifts up to its passthrough as the grid settles, so the per-battery
+  // filter below lets it out (issue #763).
+  bool any_charge_intent = false;
+  if (this->active_control_ && this->balancer_) {
+    for (const auto &kv : this->consumers_) {
+      if (!reporting(kv.second)) continue;
+      const size_t idx = bucket_index_for_phase(kv.second.phase);
+      if (idx < BUCKET_A || idx > BUCKET_ABC) continue;
+      const auto intent = this->balancer_->get_last_intent(kv.first);
+      if (intent.has_value() && *intent < 0.0f) {
+        any_charge_intent = true;
+        break;
+      }
+    }
+  }
   for (const auto &kv : this->consumers_) {
     const auto &c = kv.second;
-    if (c.timestamp <= 0.0) continue;
-    // Respect the request's "participate" flag: a battery that opted out (7th
-    // field == 0) is not aggregated into the per-phase buckets or the count.
-    if (!c.participates) continue;
-    // Skip a consumer past its TTL per response, so a battery that drops off
-    // the network stops being counted at poll granularity rather than at the
-    // next cleanup interval, which removes the entry shortly after (issue
-    // #462). The real CT is slower here: it ages its slots in 30 s steps.
-    if (this->consumer_expired_(c, now)) continue;
+    if (!reporting(c)) continue;
     const size_t idx = bucket_index_for_phase(c.phase);
     // Count every battery reporting into the bucket (regardless of power) so
     // relay mode can forward the real per-phase battery count (each battery
@@ -709,6 +730,7 @@ CT002Component::PhaseReports CT002Component::collect_reports_by_phase_() const {
           ((*intent <= 0.0f && power > 0.0f) || (*intent >= 0.0f && power < 0.0f))) {
         power = 0.0f;
       }
+      if (any_charge_intent && power > 0.0f) power = 0.0f;
     } else {
       // Relay mode forwards each battery's *reported* power, exactly like
       // the real CT (issue #457). x (inspection) consumers are never actively
