@@ -178,14 +178,19 @@ class _Fleet:
     """Several emulated batteries in one house behind one ``CT002``, on one
     emulated timeline (``marsemu.run_together``)."""
 
-    def __init__(self, devices: dict[str, tuple[Any, str]], house: Any) -> None:
+    def __init__(
+        self, devices: dict[str, tuple[Any, str]], house: Any, **ct002: Any
+    ) -> None:
         if not hasattr(marsemu, "run_together"):
             pytest.skip("marsemu without multi-device support (run_together)")
         self.devices = {name: d for name, (d, _) in devices.items()}
         self.house = house
         first = next(iter(self.devices.values()))
         self.ct002 = CT002(
-            ct_mac=CT_MAC, active_control=True, clock=lambda: T0 + first.time
+            ct_mac=CT_MAC,
+            active_control=True,
+            clock=lambda: T0 + first.time,
+            **ct002,
         )
         self.ct002.before_send = self._meter
         self._loop = asyncio.new_event_loop()
@@ -310,5 +315,48 @@ def test_full_venus_d_passing_pv_through_does_not_stop_the_others() -> None:
                 f"a charging battery stopped while the full one exported {a:.0f} W: "
                 f"B {b:.0f} W, C {c:.0f} W"
             )
+    finally:
+        fleet.close()
+
+
+@pytest.mark.timeout(1800)
+def test_venus_e3_below_its_backup_soc_is_never_rotated_to() -> None:
+    """Issue #703: a Venus E 3.0 below its discharge cut-off (depth of
+    discharge 30, so 70 %, at 66 %) never runs its phase detection and keeps
+    polling as phase 0, even under an export it could charge from.  With
+    efficiency rotation on, the CT002 must leave it alone and let the healthy
+    battery next to it take the whole surplus, instead of rotating to it and
+    probing it over and over."""
+    from marsemu.plant.battery import LfpPack
+
+    from astrameter.ct002.balancer import BalancerConfig
+
+    control = _image(ARCHIVE, "**/VNSE3-0/Control/151/*.bin")
+    bms = _image(ARCHIVE, "**/VNSE3-0/BMS/115/*.bin")
+    low = marsemu.VenusE3(
+        control, bms, pack=LfpPack(soc=0.66), control_kwargs=_identity(3)
+    )
+    ok = marsemu.VenusE3(
+        control, bms, pack=LfpPack(soc=0.50), control_kwargs=_identity(4)
+    )
+    house = marsemu.House({"A": -1200.0})
+    fleet = _Fleet(
+        {"low": (low, "A"), "ok": (ok, "A")},
+        house,
+        balancer=BalancerConfig(
+            min_efficient_power=1500, efficiency_rotation_interval=60
+        ),
+    )
+    fleet.send("low", "cd=56,dod=30", delay=25.0)
+    try:
+        fleet.run(360)
+        consumers = {c.last_ip: c for c in fleet.ct002.status_snapshot().consumers}
+        assert consumers["192.168.1.53"].phase == "0", "the low battery found a phase"
+        assert consumers["192.168.1.54"].phase == "A"
+        assert abs(low.ac_power) < 20
+        assert abs(sum(house.grid().values())) < 50, (
+            f"surplus not taken by the healthy battery: {house.grid()}, "
+            f"ok {ok.ac_power:.0f} W"
+        )
     finally:
         fleet.close()
