@@ -904,3 +904,35 @@ def test_stale_consumer_drops_out_of_aggregation_before_cleanup_runs() -> None:
     assert "b" in device._consumers  # cleanup hasn't run yet
     assert by_phase["A"].count == 1
     assert by_phase["A"].dchrg_power == 100  # b's 50 W is gone
+
+
+def test_ct002_warns_once_about_a_battery_stuck_in_phase_detection(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Issues #559 / #703: a battery that keeps polling with phase '0' for
+    minutes is stuck (a B2500 never retries a failed detection, a Venus below
+    its backup SoC never starts one), so say so once, and again only for a
+    later sweep."""
+    clock = _StepClock()
+    device = CT002(clock=clock)
+
+    def stuck() -> list[str]:
+        return [r.message for r in caplog.records if "detecting its phase" in r.message]
+
+    with caplog.at_level(logging.INFO):
+        for _ in range(60):  # 4.9 min of inspection polls
+            device._sync_inspection_filters("b2500", True)
+            clock.advance(4.9)
+        assert stuck() == []
+        for _ in range(10):
+            device._sync_inspection_filters("b2500", True)
+            clock.advance(5.0)
+        assert len(stuck()) == 1
+        assert "b2500" in stuck()[0] and "5 min" in stuck()[0]
+
+        device._sync_inspection_filters("b2500", False)
+        assert any("found its phase" in r.message for r in caplog.records)
+        device._sync_inspection_filters("b2500", True)  # a new, short sweep
+        clock.advance(30.0)
+        device._sync_inspection_filters("b2500", True)
+        assert len(stuck()) == 1
