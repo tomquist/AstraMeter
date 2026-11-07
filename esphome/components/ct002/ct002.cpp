@@ -522,12 +522,42 @@ void CT002Component::handle_request_(const uint8_t *data, size_t len,
 // committed-phase poll after the sweep. Mirrors ct002.py
 // _sync_inspection_filters.
 void CT002Component::sync_inspection_filters_(const std::string &consumer_id, bool inspecting) {
+  this->note_stuck_inspection_(consumer_id, inspecting);
   if (inspecting) {
     this->inspecting_.insert(consumer_id);
   } else if (this->inspecting_.erase(consumer_id) == 0) {
     return;
   }
   for (auto &p : this->pipeline_) p->reset();
+}
+
+// Warn once when a battery stays in phase detection for good: a B2500 whose
+// detection fails (e.g. a second battery probing at the same moment moves
+// another phase too) never retries, and a Venus below its backup / discharge
+// cut-off SoC does not start detection until it is above it. Mirrors ct002.py
+// _note_stuck_inspection (issues #559, #703).
+void CT002Component::note_stuck_inspection_(const std::string &consumer_id, bool inspecting) {
+  if (!inspecting) {
+    auto it = this->inspecting_since_.find(consumer_id);
+    if (this->stuck_inspection_warned_.erase(consumer_id) > 0) {
+      const double minutes =
+          it != this->inspecting_since_.end() ? (this->now_seconds_() - it->second) / 60.0 : 0.0;
+      ESP_LOGI(TAG, "CT002: battery %s found its phase after %.0f min", consumer_id.c_str(), minutes);
+    }
+    if (it != this->inspecting_since_.end()) this->inspecting_since_.erase(it);
+    return;
+  }
+  const double now = this->now_seconds_();
+  const double since = this->inspecting_since_.emplace(consumer_id, now).first->second;
+  if (now - since >= STUCK_INSPECTION_WARN_SECONDS &&
+      this->stuck_inspection_warned_.insert(consumer_id).second) {
+    ESP_LOGW(TAG,
+             "CT002: battery %s has been detecting its phase (phase 0) for %.0f min and is not "
+             "steered meanwhile. A B2500 does not retry a failed detection: select the meter for "
+             "it again in the app (one battery at a time) or restart it. A Venus below its backup "
+             "/ discharge cut-off SoC does not detect until it is above it.",
+             consumer_id.c_str(), (now - since) / 60.0);
+  }
 }
 
 std::string CT002Component::consumer_key_(const std::string &meter_mac,
@@ -1234,6 +1264,8 @@ void CT002Component::evict_stale_consumers_() {
     // poll that ends the sweep, so drop it here rather than leave it marked as
     // inspecting forever (mirrors Python's _cleanup_consumers).
     this->inspecting_.erase(id);
+    this->inspecting_since_.erase(id);
+    this->stuck_inspection_warned_.erase(id);
   }
   if (!stale.empty()) {
     ESP_LOGD(TAG, "Evicted %u stale consumer(s)", static_cast<unsigned>(stale.size()));
