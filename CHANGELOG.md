@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Fixed** batteries charging on and off with active control once a full Venus passes its PV surplus to the grid; the others now keep charging steadily ([#763](https://github.com/tomquist/astrameter/issues/763)).
+- **Fixed** batteries charging on and off with active control once a full Venus passes its PV surplus to the grid; the others now keep charging steadily ([#763](https://github.com/tomquist/astrameter/issues/763), [#771](https://github.com/tomquist/astrameter/pull/771)).
 
 
 ## 2.5.0
