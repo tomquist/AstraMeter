@@ -1,23 +1,27 @@
 """End-to-end against real battery firmware: the CT002 emulator steers emulated
 Marstek devices running their unmodified firmware images.
 
-``marsemu`` runs the firmware (CPU, Wi-Fi module, power stage and battery
-models).  The device's CT002 polls are handed to ``CT002._handle_request``
-in-process and its reply goes straight back to the firmware, all in the
-device's emulated time, so the loop is deterministic and runs faster than
-real time.  The house sees what the device actually delivers: the grid
-reading AstraMeter answers with is the load minus the battery's output.
+`marsemu <https://github.com/tomquist/marsemu>`_ runs the firmware (CPU, Wi-Fi
+module, power stage and battery models).  The device's CT002 polls are handed
+to ``CT002._handle_request`` in-process and its reply goes straight back to the
+firmware, all in the device's emulated time, so the loop is deterministic and
+runs faster than real time.  The house sees what the devices actually deliver:
+the grid reading AstraMeter answers with is the load minus the batteries'
+output.  Several devices share one emulated timeline (``marsemu.run_together``).
 
 Opt-in: skipped unless ``marsemu`` is importable and the firmware images are
 present (they are not redistributable).  To run::
 
-    uv run --with-editable /path/to/marsemu pytest tests/test_marsemu_e2e.py
+    uv run --with "marsemu @ git+https://github.com/tomquist/marsemu" \
+        pytest tests/test_marsemu_e2e.py
 
-with ``MARSEMU_FIRMWARE`` pointing at images laid out as
-``<device type>/<version>/*.bin`` (e.g. ``HMA-1/V232/...bin``) and, for the
-Venus E 3.0, ``MARSEMU_ARCHIVE`` at a firmware archive containing
-``VNSE3-0/Control/151`` and ``VNSE3-0/BMS/115``.  Each test takes one to
-three minutes.
+with ``MARSEMU_FIRMWARE`` pointing at B2500 images laid out as
+``<device type>/<version>/*.bin`` (e.g. ``HMA-1/V232/...bin``,
+``HMJ-2/V118/...bin``) and ``MARSEMU_ARCHIVE`` at the ``firmwares`` directory
+of https://github.com/sphings79/marstek-firmware-archiv, which holds the
+Venus images used here (``VNSE3-0/Control/151``, ``VNSE3-0/BMS/115``,
+``VNSD-0/Control/151``, ``VNSD-0/BMS/118``).  A single-battery test takes one
+to three minutes, a multi-battery one five to fifteen.
 """
 
 from __future__ import annotations
