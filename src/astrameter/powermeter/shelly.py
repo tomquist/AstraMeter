@@ -59,3 +59,15 @@ class Shelly3EMPro(Shelly):
     async def get_powermeter_watts(self) -> list[float]:
         response = await self.get_json(f"http://{self.ip}/rpc/EM.GetStatus?id=0")
         return [int(response["total_act_power"])]
+
+
+class ShellyProEM50(Shelly):
+    # One EM1 component per clamp: the meter index picks the channel, 0 if unset.
+    _rpc = True
+
+    async def get_powermeter_watts(self) -> list[float]:
+        channel = self.emeterindex or "0"
+        response = await self.get_json(
+            f"http://{self.ip}/rpc/EM1.GetStatus?id={channel}"
+        )
+        return [int(response["act_power"])]

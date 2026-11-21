@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Added** the Shelly Pro EM-50 as a power source, so AstraMeter can read it directly instead of through Home Assistant: set `TYPE = PROEM50` under `[SHELLY]` ([#781](https://github.com/tomquist/astrameter/pull/781)).
+
 - **Added** digest authentication to the JSON over HTTP power source, so it can read devices such as a Shelly Gen2+ with a login enabled: set `AUTH = digest` under `[JSON_HTTP]` ([#782](https://github.com/tomquist/astrameter/pull/782)).
 
 - **Fixed** batteries charging on and off with active control once a full Venus passes its PV surplus to the grid; the others now keep charging steadily ([#763](https://github.com/tomquist/astrameter/issues/763), [#771](https://github.com/tomquist/astrameter/pull/771)).

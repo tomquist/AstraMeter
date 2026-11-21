@@ -219,6 +219,13 @@ response. Both work — use whichever your setup needs.)
 Gen1 (Shelly 1PM/EM/3EM) expose `http://<ip>/status` with a `meters[]` /
 `emeters[]` array. Point the lambda at `root["emeters"][0]["power"]` and so on.
 
+Shelly Pro EM-50 (RPC `EM1.GetStatus`, one component per clamp): use the
+single-phase config above with
+`url: http://192.168.1.100/rpc/EM1.GetStatus?id=0` (`id=1` for the second
+clamp) and `root["act_power"]` in the lambda. As with every Shelly here, turn
+the Shelly's login off: its RPC API wants digest auth, which `http_request`
+doesn't speak.
+
 **Native alternative:** Shelly hardware is ESP-based, so you can flash ESPHome
 onto it and read its onboard energy chip (BL0942 / ADE7953 / ADE7880) as a
 native sensor. If that Shelly is ESP32-based (e.g. Shelly Pro 3EM), it can even

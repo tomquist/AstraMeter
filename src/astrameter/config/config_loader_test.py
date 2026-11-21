@@ -49,6 +49,7 @@ from astrameter.powermeter import (
     Shelly3EMPro,
     ShellyEM,
     ShellyPlus1PM,
+    ShellyProEM50,
     Sml,
     Tasmota,
     TibberPulse,
@@ -85,6 +86,7 @@ def test_create_client_filter() -> None:
         ("EM", ShellyEM),
         ("3EM", ShellyEM),
         ("3EMPro", Shelly3EMPro),
+        ("PROEM50", ShellyProEM50),
     ],
 )
 def test_create_shelly_powermeter(shelly_type: str, expected: type[Powermeter]) -> None:

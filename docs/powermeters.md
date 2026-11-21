@@ -95,6 +95,19 @@ PASS = password
 METER_INDEX = meter1
 ```
 
+### Shelly Pro EM-50
+```ini
+[SHELLY]
+TYPE = PROEM50
+IP = 192.168.1.100
+USER = username
+PASS = password
+METER_INDEX = 0
+```
+
+The Pro EM-50 has two clamps. `METER_INDEX` picks the one on your grid
+connection, `0` or `1`; it defaults to `0`.
+
 ## Tasmota
 
 ```ini

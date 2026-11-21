@@ -5,6 +5,7 @@ from astrameter.powermeter import (
     Shelly3EMPro,
     ShellyEM,
     ShellyPlus1PM,
+    ShellyProEM50,
 )
 
 
@@ -65,3 +66,23 @@ async def test_shelly3empro_get_powermeter_watts() -> None:
     shelly.session = _mock_session({"total_act_power": 450})
 
     assert await shelly.get_powermeter_watts() == [450]
+
+
+async def test_shellyproem50_reads_channel_0_by_default() -> None:
+    shelly = ShellyProEM50("192.168.1.14", "user", "pass", "")
+    shelly.session = _mock_session({"id": 0, "act_power": -321.4})
+
+    assert await shelly.get_powermeter_watts() == [-321]
+    assert shelly.session.get.call_args.args[0] == (
+        "http://192.168.1.14/rpc/EM1.GetStatus?id=0"
+    )
+
+
+async def test_shellyproem50_meter_index_picks_the_channel() -> None:
+    shelly = ShellyProEM50("192.168.1.14", "user", "pass", "1")
+    shelly.session = _mock_session({"id": 1, "act_power": 75.0})
+
+    assert await shelly.get_powermeter_watts() == [75]
+    assert shelly.session.get.call_args.args[0] == (
+        "http://192.168.1.14/rpc/EM1.GetStatus?id=1"
+    )

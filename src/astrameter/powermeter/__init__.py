@@ -41,7 +41,14 @@ if TYPE_CHECKING:
     from .mqtt import MqttPowermeter
     from .refoss import Refoss
     from .script import Script
-    from .shelly import Shelly, Shelly1PM, Shelly3EMPro, ShellyEM, ShellyPlus1PM
+    from .shelly import (
+        Shelly,
+        Shelly1PM,
+        Shelly3EMPro,
+        ShellyEM,
+        ShellyPlus1PM,
+        ShellyProEM50,
+    )
     from .shrdzm import Shrdzm
     from .sma_energy_meter import SmaEnergyMeter
     from .sml import Sml, parse_sml_obis_config
@@ -77,6 +84,7 @@ _LAZY: dict[str, tuple[str, str]] = {
     "Shelly3EMPro": (".shelly", "Shelly3EMPro"),
     "ShellyEM": (".shelly", "ShellyEM"),
     "ShellyPlus1PM": (".shelly", "ShellyPlus1PM"),
+    "ShellyProEM50": (".shelly", "ShellyProEM50"),
     "Shrdzm": (".shrdzm", "Shrdzm"),
     "SmaEnergyMeter": (".sma_energy_meter", "SmaEnergyMeter"),
     "Sml": (".sml", "Sml"),
@@ -130,6 +138,7 @@ __all__ = [
     "Shelly3EMPro",
     "ShellyEM",
     "ShellyPlus1PM",
+    "ShellyProEM50",
     "Shrdzm",
     "SmaEnergyMeter",
     "Sml",
