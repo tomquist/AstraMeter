@@ -43,6 +43,21 @@ has(shelly, "[SHELLY]", "shelly: section header");
 has(shelly, "TYPE = 3EMPro", "shelly: model");
 has(shelly, "IP = 192.168.1.50", "shelly: ip");
 lacks(shelly, "USER =", "shelly: omits blank user");
+const eyProEm50 = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "shelly", phases: 1, fields: { TYPE: "PROEM50", IP: "192.168.1.60", METER_INDEX: "1" }, tuning: {} }],
+});
+has(eyProEm50, "url: http://192.168.1.60/rpc/EM1.GetStatus?id=1", "esp/shelly: Pro EM-50 polls EM1 on the chosen channel");
+has(eyProEm50, 'root["act_power"]', "esp/shelly: Pro EM-50 reads act_power");
+lacks(eyProEm50, "Switch.GetStatus", "esp/shelly: Pro EM-50 does not poll a switch");
+const eyPlus1pm = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "shelly", phases: 1, fields: { TYPE: "PLUS1PM", IP: "192.168.1.61" }, tuning: {} }],
+});
+has(eyPlus1pm, "url: http://192.168.1.61/rpc/Switch.GetStatus?id=0", "esp/shelly: other single-phase models keep Switch.GetStatus");
+has(eyPlus1pm, 'root["apower"]', "esp/shelly: other single-phase models keep apower");
 
 // ── config.ini: HA 3-phase + tuning + transform ──────────────────────────────
 const ha = generateConfigIni({

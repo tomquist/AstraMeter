@@ -259,10 +259,11 @@ THROTTLE_INTERVAL = 0
 ## (HA discovery does not depend on this).
 
 # [SHELLY]
-# TYPE = 1PM #PLUS1PM #EM #3EM #3EMPRO
+# TYPE = 1PM #PLUS1PM #EM #3EM #3EMPro #PROEM50
 # IP = 192.168.1.100
 # USER = username
 # PASS = password
+## PROEM50: the channel to read, 0 or 1 (default 0)
 # METER_INDEX = meter1
 ## Per-powermeter throttling override (optional)
 ## Shelly devices are typically fast, so throttling may not be needed

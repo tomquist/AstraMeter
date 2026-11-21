@@ -94,6 +94,7 @@ export const SHELLY_TYPES: Option[] = [
   { value: "EM", label: "Shelly EM" },
   { value: "3EM", label: "Shelly 3EM" },
   { value: "3EMPro", label: "Shelly 3EM Pro" },
+  { value: "PROEM50", label: "Shelly Pro EM-50" },
 ];
 
 // Device types AstraMeter can emulate (Python add-on). ct002/ct003 emulate
@@ -332,7 +333,7 @@ export const POWERMETERS: Powermeter[] = [
     label: "Shelly energy meter",
     section: "SHELLY",
     blurb:
-      "A Shelly plug or energy meter (1PM, Plus 1PM, EM, 3EM, 3EM Pro) on your local network.",
+      "A Shelly plug or energy meter (1PM, Plus 1PM, EM, 3EM, 3EM Pro, Pro EM-50) on your local network.",
     docPython: "docs/powermeters.md#shelly",
     docEsphome: "docs/esphome-powermeters.md#shelly",
     fields: [
@@ -348,15 +349,19 @@ export const POWERMETERS: Powermeter[] = [
       { key: "IP", label: "IP address", help: "The Shelly's local IP, e.g. 192.168.1.100.", type: "text", placeholder: "192.168.1.100", required: true },
       { key: "USER", label: "Username", help: "Only if you protected the Shelly web UI with a login.", type: "text", placeholder: "(optional)" },
       { key: "PASS", label: "Password", help: "Only if you set a login on the Shelly.", type: "password", placeholder: "(optional)" },
-      { key: "METER_INDEX", label: "Meter index", help: "Which channel to read (e.g. meter1). Leave blank for the default.", type: "text", placeholder: "meter1", advanced: true },
+      { key: "METER_INDEX", label: "Meter index", help: "Which channel to read (e.g. meter1; 0 or 1 on a Pro EM-50). Leave blank for the default.", type: "text", placeholder: "meter1", advanced: true },
     ],
     esphome: {
       kind: "http",
       tier: "generic",
-      note: "Polls the Shelly's HTTP API. Single-phase reads RPC apower; 3-phase reads EM.GetStatus.",
-      url1: (f) => `http://${f.IP || "192.168.1.100"}/rpc/Switch.GetStatus?id=0`,
+      note: "Polls the Shelly's HTTP API. Single-phase reads RPC apower (act_power from EM1.GetStatus on a Pro EM-50); 3-phase reads EM.GetStatus.",
+      url1: (f) =>
+        f.TYPE === "PROEM50"
+          ? `http://${f.IP || "192.168.1.100"}/rpc/EM1.GetStatus?id=${String(f.METER_INDEX ?? "").trim() || "0"}`
+          : `http://${f.IP || "192.168.1.100"}/rpc/Switch.GetStatus?id=0`,
       url3: (f) => `http://${f.IP || "192.168.1.100"}/rpc/EM.GetStatus?id=0`,
-      lambda1: 'id(grid_l1).publish_state(root["apower"]);',
+      lambda1: (f) =>
+        `id(grid_l1).publish_state(root["${f.TYPE === "PROEM50" ? "act_power" : "apower"}"]);`,
       lambda3:
         'id(grid_l1).publish_state(root["a_act_power"]);\n                    id(grid_l2).publish_state(root["b_act_power"]);\n                    id(grid_l3).publish_state(root["c_act_power"]);',
       warn: (f) =>

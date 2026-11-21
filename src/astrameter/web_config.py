@@ -322,7 +322,10 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         "PASSWORD": {"type": "password"},
     },
     "SHELLY": _pm(
-        TYPE={"type": "select", "options": ["1PM", "PLUS1PM", "EM", "3EM", "3EMPro"]},
+        TYPE={
+            "type": "select",
+            "options": ["1PM", "PLUS1PM", "EM", "3EM", "3EMPro", "PROEM50"],
+        },
         PASS={"type": "password"},
     ),
     "TASMOTA": _pm(
