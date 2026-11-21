@@ -392,9 +392,15 @@ URL = http://example.com/api
 JSON_PATHS = $.power
 USERNAME = user (Optional)
 PASSWORD = pass (Optional)
+# How USERNAME/PASSWORD are sent: basic (default) or digest (Optional)
+AUTH = basic
 # Additional headers separated by ';' using 'Key: Value'
 HEADERS = Authorization: Bearer token
 ```
+
+Use `AUTH = digest` for a device that asks for digest auth, such as a Shelly
+Gen2+ (Pro, Plus, Gen3) with a login enabled. A token goes in `HEADERS`
+instead.
 
 `JSON_PATHS` is parsed with the [`jsonpath-ng` extended syntax](https://github.com/h2non/jsonpath-ng#extensions), so you can chain extensions like `` `split(...)` `` or `` `sub(/regex/, replacement)` `` to massage the value before it's converted to a float. For example, an openHAB `Number:Power` item returns `"331.74 W"` — strip the unit with either of:
 

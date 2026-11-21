@@ -507,6 +507,41 @@ const eyJsonAuthHeader = generateEsphome({
 });
 lacks(eyJsonAuthHeader, "Basic ", "esp/json_http: an explicit Authorization header wins over the login");
 has(eyJsonAuthHeader, "# ⚠ Both a login and an Authorization header", "esp/json_http: the ignored login is called out");
+const eyJsonDigest = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "json_http", phases: 1, fields: { URL: "http://x/api", USERNAME: "me", PASSWORD: "pw", AUTH: "digest" }, tuning: {} }],
+  ct: { fields: {} },
+});
+lacks(eyJsonDigest, "Authorization: Basic", "esp/json_http: a digest login is not sent as basic auth");
+has(eyJsonDigest, "# ⚠ ESPHome's http_request only speaks basic auth", "esp/json_http: a digest login warns");
+const eyJsonDigestPassOnly = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "json_http", phases: 1, fields: { URL: "http://x/api", PASSWORD: "pw", AUTH: " Digest " }, tuning: {} }],
+  ct: { fields: {} },
+});
+lacks(eyJsonDigestPassOnly, "Authorization: Basic", "esp/json_http: a padded, capitalised digest is still digest");
+has(eyJsonDigestPassOnly, "# ⚠ ESPHome's http_request only speaks basic auth", "esp/json_http: a password-only digest login warns");
+const eyJsonDigestNoLogin = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "json_http", phases: 1, fields: { URL: "http://x/api", AUTH: "digest" }, tuning: {} }],
+  ct: { fields: {} },
+});
+lacks(eyJsonDigestNoLogin, "only speaks basic auth", "esp/json_http: digest without a login stays silent");
+const iniJsonDigest = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["ct002"] },
+  meters: [{ type: "json_http", phases: 1, fields: { URL: "http://x/api", JSON_PATHS: "$.power", USERNAME: "me", AUTH: "digest" }, tuning: {} }],
+});
+has(iniJsonDigest, "AUTH = digest", "json_http: AUTH reaches config.ini");
+const iniJsonBasic = generateConfigIni({
+  target: "python",
+  general: { deviceTypes: ["ct002"] },
+  meters: [{ type: "json_http", phases: 1, fields: { URL: "http://x/api", JSON_PATHS: "$.power", USERNAME: "me" }, tuning: {} }],
+});
+lacks(iniJsonBasic, "AUTH =", "json_http: the default auth is not written out");
 
 const eyMqttJson = generateEsphome({
   target: "esphome",

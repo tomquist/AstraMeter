@@ -686,7 +686,11 @@ For three-phase, subscribe to three topics (or read three fields) into
 
 **Tier: 🟢 Native** (generic `http_request`). Point the URL at your endpoint
 and set the lambda to your JSON field. The `http_request.get` action supports
-headers and basic auth:
+headers and basic auth, but not digest auth, so a `[JSON_HTTP]` config with
+`AUTH = digest` needs the device's login removed to work on an ESP32. Without
+its login, anyone on your network can reach everything the login protected,
+not just the reading: restrict the device's network access, or read it through
+MQTT or Home Assistant instead.
 
 ```yaml
 external_components:

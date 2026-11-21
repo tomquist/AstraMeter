@@ -524,6 +524,27 @@ def test_create_json_http_powermeter() -> None:
             raise
 
 
+def test_create_json_http_powermeter_reads_auth() -> None:
+    """AUTH picks the scheme; leaving it out keeps basic auth."""
+    from astrameter.powermeter.json_http import JsonHttpPowermeter
+
+    config = configparser.ConfigParser()
+    config["JSON_HTTP"] = {
+        "URL": "http://localhost",
+        "JSON_PATHS": "$.power",
+        "USERNAME": "u",
+        "PASSWORD": "p",
+        "AUTH": "digest",
+    }
+    meter = create_json_http_powermeter("JSON_HTTP", config)
+    assert isinstance(meter, JsonHttpPowermeter)
+    assert meter.auth_method == "digest"
+    del config["JSON_HTTP"]["AUTH"]
+    meter = create_json_http_powermeter("JSON_HTTP", config)
+    assert isinstance(meter, JsonHttpPowermeter)
+    assert meter.auth_method == "basic"
+
+
 def test_create_tq_em_powermeter() -> None:
     """Test TQ Energy Manager powermeter creation."""
     config = configparser.ConfigParser()

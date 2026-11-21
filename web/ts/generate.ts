@@ -483,7 +483,8 @@ function esphomeSensor(state: State): EsphomeSensor {
               return idx >= 0 ? [h.slice(0, idx).trim(), h.slice(idx + 1).trim()] : [h, ""];
             })
         : [];
-    if (esp.basicAuthFields) {
+    // A digest login can't become a header; the meter's warn says so instead.
+    if (esp.basicAuthFields && String(f.AUTH ?? "").trim().toLowerCase() !== "digest") {
       const [user, pass] = esp.basicAuthFields.map((key) => (isBlank(f[key]) ? "" : String(f[key])));
       if (user || pass) {
         if (headers.some(([k]) => k.toLowerCase() === "authorization")) {

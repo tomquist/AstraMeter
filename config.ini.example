@@ -424,6 +424,8 @@ THROTTLE_INTERVAL = 0
 ##JSON_PATHS = $.state.`sub(/[^0-9.\-]+$/, )`
 # USERNAME = user
 # PASSWORD = pass
+## How USERNAME/PASSWORD are sent: basic (default) or digest
+# AUTH = basic
 # HEADERS = Authorization: Bearer token
 
 # [TQ_EM]
