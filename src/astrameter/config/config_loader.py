@@ -483,6 +483,7 @@ def create_shelly_powermeter(
         Shelly3EMPro,
         ShellyEM,
         ShellyPlus1PM,
+        ShellyProEM50,
     )
 
     shelly_type = config.get(section, "TYPE", fallback="")
@@ -492,6 +493,7 @@ def create_shelly_powermeter(
         "EM": ShellyEM,
         "3EM": ShellyEM,
         "3EMPro": Shelly3EMPro,
+        "PROEM50": ShellyProEM50,
     }
     model = models.get(shelly_type)
     if model is None:
