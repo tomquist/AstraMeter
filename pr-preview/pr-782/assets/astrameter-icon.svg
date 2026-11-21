@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" width="100%" height="100%" role="img" aria-label="AstraMeter">
+  <defs>
+    <radialGradient id="bgGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#1e293b" />
+      <stop offset="100%" stop-color="#020617" />
+    </radialGradient>
+    <linearGradient id="energyGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#10b981" />
+      <stop offset="40%" stop-color="#06b6d4" />
+      <stop offset="100%" stop-color="#8b5cf6" />
+    </linearGradient>
+    <linearGradient id="starGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fde047" />
+      <stop offset="50%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#b45309" />
+    </linearGradient>
+    <filter id="neonGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+    <filter id="dropShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#000000" flood-opacity="0.6" />
+    </filter>
+  </defs>
+
+  <!-- Base plate -->
+  <rect width="300" height="300" rx="40" fill="url(#bgGlow)" />
+  <rect width="300" height="300" rx="40" fill="none" stroke="#334155" stroke-width="2" />
+
+  <!-- Meter dial -->
+  <path d="M 50 195 A 100 100 0 0 1 250 195" fill="none" stroke="#1e293b" stroke-width="16" stroke-linecap="round" />
+  <path d="M 70 195 A 80 80 0 0 1 230 195" fill="none" stroke="#475569" stroke-width="4" stroke-linecap="butt" stroke-dasharray="4 21.13" />
+  <path d="M 50 195 A 100 100 0 0 1 230.9 136.2" fill="none" stroke="url(#energyGradient)" stroke-width="16" stroke-linecap="round" filter="url(#neonGlow)" />
+
+  <!-- Astra needle -->
+  <path d="M 150 65 Q 152 177 185 195 Q 152 203 150 235 Q 148 203 115 195 Q 148 177 150 65 Z" fill="url(#starGradient)" filter="url(#dropShadow)" />
+  <circle cx="150" cy="195" r="14" fill="#0f172a" stroke="#334155" stroke-width="3" filter="url(#dropShadow)" />
+  <circle cx="150" cy="195" r="5" fill="#fde047" />
+</svg>
