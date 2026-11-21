@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 import aiohttp
-from aiohttp import BasicAuth
+from aiohttp import BasicAuth, DigestAuthMiddleware
 from jsonpath_ng.ext import parse
 
 from .base import as_list
@@ -39,6 +39,9 @@ def extract_json_value(data: Any, path: str) -> float:
         ) from exc
 
 
+AUTH_METHODS = ("basic", "digest")
+
+
 class JsonHttpPowermeter(HttpPowermeter):
     def __init__(
         self,
@@ -47,20 +50,33 @@ class JsonHttpPowermeter(HttpPowermeter):
         username: str | None = None,
         password: str | None = None,
         headers: dict[str, str] | None = None,
+        auth: str = "basic",
     ) -> None:
+        method = auth.strip().lower()
+        if method not in AUTH_METHODS:
+            raise ValueError(
+                f"Unknown JSON HTTP AUTH {auth!r}; expected one of "
+                f"{', '.join(AUTH_METHODS)}"
+            )
         self.url = url
         self.json_paths = as_list(json_path)
-        self.auth = (
-            BasicAuth(username or "", password or "") if username or password else None
-        )
+        self.username = username or ""
+        self.password = password or ""
+        self.auth_method = method
         self.headers = headers or {}
 
     def _session_options(self) -> dict[str, Any]:
-        return {
-            **super()._session_options(),
-            "auth": self.auth,
-            "headers": self.headers,
-        }
+        options = {**super()._session_options(), "headers": self.headers}
+        if not (self.username or self.password):
+            options["auth"] = None
+        elif self.auth_method == "digest":
+            # Answers the server's challenge, which Shelly Gen2+ RPC requires.
+            options["middlewares"] = [
+                DigestAuthMiddleware(self.username, self.password)
+            ]
+        else:
+            options["auth"] = BasicAuth(self.username, self.password)
+        return options
 
     async def get_powermeter_watts(self) -> list[float]:
         try:

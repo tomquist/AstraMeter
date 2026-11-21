@@ -2,6 +2,8 @@
 
 ## Next
 
+- **Added** digest authentication to the JSON over HTTP power source, so it can read devices such as a Shelly Gen2+ with a login enabled: set `AUTH = digest` under `[JSON_HTTP]`.
+
 - **Fixed** batteries charging on and off with active control once a full Venus passes its PV surplus to the grid; the others now keep charging steadily ([#763](https://github.com/tomquist/astrameter/issues/763), [#771](https://github.com/tomquist/astrameter/pull/771)).
 
 - **Added** a warning when a battery is stuck detecting its phase for five minutes, with what to do: a B2500 never retries a failed detection, and a Venus below its backup SoC waits until it is above it ([#559](https://github.com/tomquist/astrameter/issues/559), [#703](https://github.com/tomquist/astrameter/issues/703), [#772](https://github.com/tomquist/astrameter/pull/772)).

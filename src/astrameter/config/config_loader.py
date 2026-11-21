@@ -593,7 +593,11 @@ def create_json_http_powermeter(
         json_path_value,
         headers=headers,
         **_declared(
-            config, section, username=("USERNAME", str), password=("PASSWORD", str)
+            config,
+            section,
+            username=("USERNAME", str),
+            password=("PASSWORD", str),
+            auth=("AUTH", str),
         ),
     )
 

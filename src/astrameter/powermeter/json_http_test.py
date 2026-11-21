@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
-from aiohttp import BasicAuth, ClientTimeout
+import pytest
+from aiohttp import BasicAuth, ClientTimeout, DigestAuthMiddleware
 
 from astrameter.powermeter import JsonHttpPowermeter
 
@@ -56,6 +57,44 @@ async def test_headers_and_auth(mock_aiohttp_session: MagicMock) -> None:
         assert result == [50.0]
         mock_aiohttp_session.get.assert_called_once_with("http://localhost")
         await meter.stop()
+
+
+async def test_digest_auth_answers_the_challenge(
+    mock_aiohttp_session: MagicMock,
+) -> None:
+    mock_aiohttp_session.set_json({"act_power": -42})
+    with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session) as mock_cls:
+        meter = JsonHttpPowermeter(
+            "http://shelly/rpc/EM1.GetStatus?id=0",
+            "$.act_power",
+            username="admin",
+            password="secret",
+            auth="Digest",
+        )
+        await meter.start()
+        options = mock_cls.call_args.kwargs
+        assert "auth" not in options
+        [middleware] = options["middlewares"]
+        assert isinstance(middleware, DigestAuthMiddleware)
+        assert await meter.get_powermeter_watts() == [-42.0]
+        await meter.stop()
+
+
+async def test_digest_without_credentials_sends_no_auth(
+    mock_aiohttp_session: MagicMock,
+) -> None:
+    with patch("aiohttp.ClientSession", return_value=mock_aiohttp_session) as mock_cls:
+        meter = JsonHttpPowermeter("http://localhost", "$.power", auth="digest")
+        await meter.start()
+        options = mock_cls.call_args.kwargs
+        assert options["auth"] is None
+        assert "middlewares" not in options
+        await meter.stop()
+
+
+def test_unknown_auth_method_is_rejected() -> None:
+    with pytest.raises(ValueError, match="Unknown JSON HTTP AUTH 'ntlm'"):
+        JsonHttpPowermeter("http://localhost", "$.power", auth="ntlm")
 
 
 async def test_json_path_parsed_once_across_readings(

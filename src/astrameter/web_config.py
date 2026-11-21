@@ -366,7 +366,10 @@ SECTION_KEY_TYPES: dict[str, dict[str, dict[str, object]]] = {
         TLS={"type": "boolean"},
         PASSWORD={"type": "password"},
     ),
-    "JSON_HTTP": _pm(PASSWORD={"type": "password"}),
+    "JSON_HTTP": _pm(
+        PASSWORD={"type": "password"},
+        AUTH={"type": "select", "options": ["basic", "digest"]},
+    ),
     "TQ_EM": _pm(
         PASSWORD={"type": "password"},
         TIMEOUT={"type": "float"},

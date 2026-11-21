@@ -641,8 +641,20 @@ export const POWERMETERS: Powermeter[] = [
     fields: [
       { key: "URL", label: "URL", type: "text", placeholder: "http://example.com/api", required: true, help: "The endpoint returning JSON." },
       { key: "JSON_PATHS", label: "JSON path(s)", type: "text", placeholder: "$.power", phase: true, help: "JSONPath to the value. For 3-phase, give one path per phase. Supports extensions like `.split(...)` to strip a unit." },
-      { key: "USERNAME", label: "Username", type: "text", placeholder: "(optional)", advanced: true, help: "HTTP basic-auth user." },
-      { key: "PASSWORD", label: "Password", type: "password", placeholder: "(optional)", advanced: true, help: "HTTP basic-auth password." },
+      { key: "USERNAME", label: "Username", type: "text", placeholder: "(optional)", advanced: true, help: "HTTP auth user." },
+      { key: "PASSWORD", label: "Password", type: "password", placeholder: "(optional)", advanced: true, help: "HTTP auth password." },
+      {
+        key: "AUTH",
+        label: "Auth method",
+        type: "select",
+        default: "",
+        options: [
+          { value: "", label: "Basic (default)" },
+          { value: "digest", label: "Digest" },
+        ],
+        advanced: true,
+        help: "How the username and password are sent. Pick Digest for a Shelly Gen2+ (Pro, Plus, Gen3) with a login.",
+      },
       { key: "HEADERS", label: "Extra headers", type: "text", placeholder: "Authorization: Bearer token", advanced: true, help: "Separate multiple with ';'. Format: 'Key: Value'." },
     ],
     esphome: {
@@ -654,6 +666,10 @@ export const POWERMETERS: Powermeter[] = [
       headersField: "HEADERS",
       jsonPathsField: "JSON_PATHS",
       basicAuthFields: ["USERNAME", "PASSWORD"],
+      warn: (f) =>
+        f.AUTH === "digest" && String(f.USERNAME ?? "").trim()
+          ? "ESPHome's http_request only speaks basic auth, not digest. Remove the device's login, or read it through MQTT or Home Assistant instead."
+          : null,
     },
   },
   {
