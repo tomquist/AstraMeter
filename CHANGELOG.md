@@ -2,7 +2,7 @@
 
 ## Next
 
-- **Added** the Shelly Pro EM-50 as a power source, so AstraMeter can read it directly instead of through Home Assistant: set `TYPE = PROEM50` under `[SHELLY]`.
+- **Added** the Shelly Pro EM-50 as a power source, so AstraMeter can read it directly instead of through Home Assistant: set `TYPE = PROEM50` under `[SHELLY]` ([#781](https://github.com/tomquist/astrameter/pull/781)).
 
 - **Fixed** batteries charging on and off with active control once a full Venus passes its PV surplus to the grid; the others now keep charging steadily ([#763](https://github.com/tomquist/astrameter/issues/763), [#771](https://github.com/tomquist/astrameter/pull/771)).
 
