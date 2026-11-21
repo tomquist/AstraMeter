@@ -263,8 +263,9 @@ THROTTLE_INTERVAL = 0
 # IP = 192.168.1.100
 # USER = username
 # PASS = password
-## PROEM50: the channel to read, 0 or 1 (default 0)
 # METER_INDEX = meter1
+## PROEM50 takes the clamp number instead, 0 or 1 (default 0):
+##METER_INDEX = 0
 ## Per-powermeter throttling override (optional)
 ## Shelly devices are typically fast, so throttling may not be needed
 # THROTTLE_INTERVAL = 0
