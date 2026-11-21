@@ -667,7 +667,8 @@ export const POWERMETERS: Powermeter[] = [
       jsonPathsField: "JSON_PATHS",
       basicAuthFields: ["USERNAME", "PASSWORD"],
       warn: (f) =>
-        f.AUTH === "digest" && String(f.USERNAME ?? "").trim()
+        String(f.AUTH ?? "").trim().toLowerCase() === "digest" &&
+        (String(f.USERNAME ?? "").trim() || String(f.PASSWORD ?? "").trim())
           ? "ESPHome's http_request only speaks basic auth, not digest. Remove the device's login, or read it through MQTT or Home Assistant instead."
           : null,
     },

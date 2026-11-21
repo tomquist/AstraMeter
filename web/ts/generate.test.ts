@@ -500,6 +500,21 @@ const eyJsonDigest = generateEsphome({
 });
 lacks(eyJsonDigest, "Authorization: Basic", "esp/json_http: a digest login is not sent as basic auth");
 has(eyJsonDigest, "# ⚠ ESPHome's http_request only speaks basic auth", "esp/json_http: a digest login warns");
+const eyJsonDigestPassOnly = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "json_http", phases: 1, fields: { URL: "http://x/api", PASSWORD: "pw", AUTH: " Digest " }, tuning: {} }],
+  ct: { fields: {} },
+});
+lacks(eyJsonDigestPassOnly, "Authorization: Basic", "esp/json_http: a padded, capitalised digest is still digest");
+has(eyJsonDigestPassOnly, "# ⚠ ESPHome's http_request only speaks basic auth", "esp/json_http: a password-only digest login warns");
+const eyJsonDigestNoLogin = generateEsphome({
+  target: "esphome",
+  esphome: {},
+  meters: [{ type: "json_http", phases: 1, fields: { URL: "http://x/api", AUTH: "digest" }, tuning: {} }],
+  ct: { fields: {} },
+});
+lacks(eyJsonDigestNoLogin, "only speaks basic auth", "esp/json_http: digest without a login stays silent");
 const iniJsonDigest = generateConfigIni({
   target: "python",
   general: { deviceTypes: ["ct002"] },
