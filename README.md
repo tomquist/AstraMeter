@@ -26,8 +26,9 @@ net-zero grid exchange.
 | [hame-relay](https://github.com/tomquist/hame-relay) | Connects the official Marstek cloud/app and your local smart home so both work together, forwarding data whichever way your battery is set up |
 | [marsrelay](https://github.com/tomquist/marsrelay) | Runs your battery completely offline, with no internet or Marstek cloud, while still sending all its data to your smart home |
 | **AstraMeter** (this repo) | Tells your battery your live grid usage (read from your existing meter) so it charges and discharges to avoid buying or selling power |
-| [hmjs](https://github.com/tomquist/hmjs) | Sets up and configures B2500 batteries over Bluetooth, right from your web browser, with no app or account needed |
+| [hmjs](https://github.com/tomquist/hmjs) | Sets up and configures Marstek batteries and meters over Bluetooth, right from your web browser, with no app or account needed |
 | [esphome-b2500](https://github.com/tomquist/esphome-b2500) | Continuously monitors and controls a B2500 over Bluetooth using a small ESP32 board |
+| [marsemu](https://github.com/tomquist/marsemu) | Runs the real firmware of Marstek batteries and meters on your computer, so you can try your smart home setup without touching a real device |
 <!-- marstek-family:end -->
 
 It does this by emulating one or more of these devices:
